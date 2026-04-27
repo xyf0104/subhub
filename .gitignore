@@ -8,3 +8,4 @@ data/shares.json
 *.log
 fix_shares*.py
 ping-tunnel
+INSTALL_INFO.txt

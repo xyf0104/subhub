@@ -16,7 +16,7 @@ error() { echo -e "${RED}[✗]${NC} $*"; }
 ask()   { echo -e "${CYAN}[?]${NC} $*"; }
 
 INSTALL_DIR="/opt/subhub"
-REPO_URL="https://gitee.com/wufeng/subhub.git"
+REPO_URL="https://gitee.com/ranxiaoer/subhub.git"
 
 echo ""
 echo -e "${PURPLE}╔══════════════════════════════════════════════════╗${NC}"

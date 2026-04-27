@@ -15,7 +15,7 @@
 ## 🚀 一键安装
 
 ```bash
-bash <(curl -sL https://gitee.com/wufeng/subhub/raw/main/install.sh)
+bash <(curl -sL https://gitee.com/ranxiaoer/subhub/raw/main/install.sh)
 ```
 
 ### 前提条件

@@ -1,0 +1,10 @@
+node_modules/
+.env
+data/nodes.json
+data/subscriptions.json
+data/config.json
+data/shares.json
+*.tar.gz
+*.log
+fix_shares*.py
+ping-tunnel

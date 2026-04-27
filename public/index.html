@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="无风节点配置 - 自托管代理订阅管理">
+  <title>无风节点配置</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚀</text></svg>">
+  <script src="https://cdn.jsdelivr.net/npm/qrious@4.0.2/dist/qrious.min.js"></script>
+</head>
+<body>
+
+  <!-- Login Page -->
+  <div id="loginPage" class="login-container">
+    <div class="login-card">
+      <div class="logo">
+        <h1 style="background:linear-gradient(135deg,#6366f1,#a855f7,#ec4899);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">🌊 节点配置<span style="font-size:0.6em;">by无风</span></h1>
+        <p>自托管代理订阅管理服务</p>
+      </div>
+      <form onsubmit="handleLogin(event)">
+        <div class="form-group">
+          <label>管理密码</label>
+          <input class="form-input" type="password" id="loginPassword" placeholder="请输入管理密码" autofocus required>
+        </div>
+        <button class="btn btn-primary btn-full" type="submit" style="margin-top:8px;">登 录</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- App Container -->
+  <div id="appContainer" class="app-container">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h1 style="background:linear-gradient(135deg,#6366f1,#a855f7,#ec4899);-webkit-background-clip:text;-webkit-text-fill-color:transparent;font-size:1.3rem;">🌊 节点配置<span style="font-size:0.6em;">by无风</span></h1>
+        <p>订阅管理服务</p>
+      </div>
+      <nav class="sidebar-nav">
+        <div class="nav-item active" data-page="dashboard"><span class="icon">📊</span><span>仪表盘</span></div>
+        <div class="nav-item" data-page="nodes"><span class="icon">📡</span><span>节点管理</span></div>
+        <div class="nav-item" data-page="subscriptions"><span class="icon">🔗</span><span>订阅源</span></div>
+        <div class="nav-item" data-page="shares"><span class="icon">🎁</span><span>分享管理</span></div>
+        <div class="nav-item" data-page="settings"><span class="icon">⚙️</span><span>设置</span></div>
+      </nav>
+      <div class="sidebar-footer">
+        <button class="btn btn-sm btn-full" onclick="handleLogout()">🚪 退出登录</button>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <header class="page-header">
+        <div class="flex-center gap-3">
+          <button class="mobile-menu-btn" onclick="toggleMobileMenu()">☰</button>
+          <h2 id="pageTitle">仪表盘</h2>
+        </div>
+        <div class="flex-center gap-3">
+          <button class="theme-toggle" onclick="toggleTheme()" title="切换日夜模式" id="themeToggleBtn">🌙</button>
+          <div class="actions" id="headerActions"></div>
+        </div>
+      </header>
+      <div class="page-body">
+        <section id="page-dashboard" class="page-section active"><div id="dashboard-content"><div class="empty-state"><div class="icon" style="animation:pulse 1.5s infinite">⏳</div><p>加载中...</p></div></div></section>
+        <section id="page-nodes" class="page-section"><div id="nodes-content"></div></section>
+        <section id="page-subscriptions" class="page-section"><div id="subs-content"></div></section>
+        <section id="page-shares" class="page-section"><div id="shares-content"></div></section>
+        <section id="page-settings" class="page-section"><div id="settings-content"></div></section>
+      </div>
+    </main>
+  </div>
+
+  <!-- Add/Edit Node Modal -->
+  <div id="nodeModal" class="modal-overlay">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="nodeModalTitle">添加节点</h3>
+        <button class="modal-close" onclick="closeModal('nodeModal')">✕</button>
+      </div>
+      <div class="modal-body">
+        <form id="nodeForm" onsubmit="submitNode(event)">
+          <input type="hidden" id="nodeFormId">
+          <input type="hidden" id="nodeAddMode" value="uri">
+          <div class="tab-group">
+            <button type="button" class="tab-btn node-tab-btn active" data-mode="uri" onclick="switchNodeAddMode('uri')">URI 导入</button>
+            <button type="button" class="tab-btn node-tab-btn" data-mode="manual" onclick="switchNodeAddMode('manual')">手动填写</button>
+          </div>
+          <div id="uriInput">
+            <div class="form-group">
+              <label>节点 URI</label>
+              <input class="form-input" id="nodeURI" placeholder="hy2://... 或 vless://... 或 vmess://...">
+              <p class="text-muted mt-2" style="font-size:0.76rem;">支持: hy2://, vless://, vmess://, trojan://, ss://, tuic://</p>
+            </div>
+          </div>
+          <div id="manualInput" style="display:none;">
+            <div class="form-row">
+              <div class="form-group"><label>节点名称 *</label><input class="form-input" id="nodeName" placeholder="例: HK-Hysteria2" required></div>
+              <div class="form-group"><label>协议类型 *</label>
+                <select class="form-input" id="nodeType" onchange="updateManualFields()">
+                  <option value="hysteria2">Hysteria 2</option><option value="vless">VLESS</option>
+                  <option value="vmess">VMess</option><option value="trojan">Trojan</option>
+                  <option value="ss">Shadowsocks</option><option value="tuic">TUIC</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group"><label>服务器地址 *</label><input class="form-input" id="nodeServer" placeholder="example.com" required></div>
+              <div class="form-group"><label>端口 *</label><input class="form-input" id="nodePort" type="number" value="443" required></div>
+            </div>
+            <div class="form-group"><label>地区</label>
+              <select class="form-input" id="nodeRegion">
+                <option value="HK">🇭🇰 香港</option><option value="JP">🇯🇵 日本</option>
+                <option value="SG">🇸🇬 新加坡</option><option value="US">🇺🇸 美国</option>
+                <option value="TW">🇹🇼 台湾</option><option value="KR">🇰🇷 韩国</option>
+                <option value="UK">🇬🇧 英国</option><option value="DE">🇩🇪 德国</option>
+                <option value="OTHER">🌍 其他</option>
+              </select>
+            </div>
+            <div id="dynamicFields" class="dynamic-fields"></div>
+          </div>
+          <div class="modal-footer" style="padding:14px 0 0;border:0;">
+            <button type="button" class="btn btn-secondary" onclick="closeModal('nodeModal')">取消</button>
+            <button type="submit" class="btn btn-primary">保存节点</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Batch Import Modal -->
+  <div id="batchModal" class="modal-overlay">
+    <div class="modal">
+      <div class="modal-header"><h3>批量导入节点</h3><button class="modal-close" onclick="closeModal('batchModal')">✕</button></div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>输入节点 URI（每行一个）</label>
+          <textarea class="form-input" id="batchText" rows="10" placeholder="hy2://...&#10;vless://...&#10;vmess://..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('batchModal')">取消</button>
+        <button class="btn btn-primary" onclick="submitBatch()">导入</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Subscription Modal -->
+  <div id="subModal" class="modal-overlay">
+    <div class="modal">
+      <div class="modal-header"><h3>添加订阅源</h3><button class="modal-close" onclick="closeModal('subModal')">✕</button></div>
+      <div class="modal-body">
+        <div class="form-group"><label>订阅名称 *</label><input class="form-input" id="subName" placeholder="例: 飞兔云订阅"></div>
+        <div class="form-group"><label>订阅 URL *（支持 http / https）</label><input class="form-input" id="subURL" placeholder="http:// 或 https://..."></div>
+        <div class="form-group">
+          <label>拉取方式</label>
+          <select class="form-input" id="subFetchMode">
+            <option value="direct">🌐 直连拉取（VPS 服务器直连）</option>
+            <option value="china">🇨🇳 国内中转（大陆服务器代理拉取）</option>
+          </select>
+          <p style="font-size:0.8rem;color:var(--text-muted);margin-top:4px;">国内机场订阅建议选「国内中转」，海外订阅选「直连拉取」</p>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('subModal')">取消</button>
+        <button class="btn btn-primary" onclick="submitSub()">添加并拉取</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- QR Code Modal -->
+  <div id="qrModal" class="modal-overlay" style="z-index:210;">
+    <div class="modal" style="max-width:400px;">
+      <div class="modal-header"><h3 id="qrModalTitle">二维码</h3><button class="modal-close" onclick="closeModal('qrModal')">✕</button></div>
+      <div class="qr-modal-body">
+        <canvas id="qrCanvas"></canvas>
+        <div class="qr-label" id="qrLabel"></div>
+        <button class="btn btn-secondary btn-sm mt-4" onclick="downloadQR()" style="margin-top:16px;">📥 保存图片</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Test Results Modal -->
+  <div id="testModal" class="modal-overlay">
+    <div class="modal" style="max-width:700px;">
+      <div class="modal-header"><h3>节点测试结果</h3><button class="modal-close" onclick="closeModal('testModal')">✕</button></div>
+      <div class="modal-body" id="testResultsContent"></div>
+    </div>
+  </div>
+
+  <!-- 创建分享弹窗 -->
+  <div id="shareModal" class="modal-overlay">
+    <div class="modal" style="max-width:600px;">
+      <div class="modal-header"><h3>创建分享</h3><button class="modal-close" onclick="closeModal('shareModal')">✕</button></div>
+      <div class="modal-body">
+        <div class="form-group"><label>分享标题 *（朋友在客户端看到的名字）</label><input class="form-input" id="shareTitle" placeholder="例: 小明专用"></div>
+        <div class="form-row">
+          <div class="form-group"><label>总流量限制 (GB，0=不限)</label><input class="form-input" id="shareTraffic" type="number" value="100" min="0"></div>
+          <div class="form-group"><label>有效天数 (0=永久)</label><input class="form-input" id="shareExpireDays" type="number" value="30" min="0"></div>
+        </div>
+        <div class="form-group">
+          <label>选择节点 <button type="button" class="btn btn-sm" style="font-size:0.72rem;padding:2px 8px;margin-left:8px;" onclick="toggleShareAll(true)">全选</button> <button type="button" class="btn btn-sm" style="font-size:0.72rem;padding:2px 8px;" onclick="toggleShareAll(false)">全不选</button></label>
+          <div id="shareNodeList" class="share-node-list"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('shareModal')">取消</button>
+        <button class="btn btn-primary" onclick="submitShare()">创建分享</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 分享链接弹窗 -->
+  <div id="shareLinkModal" class="modal-overlay">
+    <div class="modal" style="max-width:700px;">
+      <div class="modal-header"><h3 id="shareLinkTitle">订阅链接</h3><button class="modal-close" onclick="closeModal('shareLinkModal')">✕</button></div>
+      <div class="modal-body">
+        <div id="shareLinkList"></div>
+      </div>
+    </div>
+  </div>
+
+
+  <script src="/app.js"></script>
+</body>
+</html>

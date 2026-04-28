@@ -6,6 +6,7 @@ s-ui 客户端管理 API 桥接服务
 """
 
 import json
+from urllib.parse import unquote
 import sqlite3
 import time
 import uuid
@@ -258,7 +259,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
         # PUT /api/clients/NAME — 更新用户的入站权限 / 重命名
         if self.path.startswith("/api/clients/"):
-            name = self.path.split("/api/clients/")[1]
+            name = unquote(self.path.split("/api/clients/")[1])
             conn = sqlite3.connect(DB_PATH)
             client = conn.execute("SELECT id, config, inbounds, links FROM clients WHERE name=?", (name,)).fetchone()
             if not client:
@@ -289,7 +290,18 @@ class BridgeHandler(BaseHTTPRequestHandler):
                     (json.dumps(new_inbound_ids, indent=4).encode(), client_id)
                 )
 
-            if new_name or new_inbound_ids is not None:
+            # 更新流量限制
+            new_volume = data.get("volume")
+            if new_volume is not None:
+                conn.execute("UPDATE clients SET volume=? WHERE id=?", (new_volume, client_id))
+
+            # 更新到期时间
+            new_expiry = data.get("expiry")
+            if new_expiry is not None:
+                conn.execute("UPDATE clients SET expiry=? WHERE id=?", (new_expiry, client_id))
+
+            has_change = new_name or new_inbound_ids is not None or new_volume is not None or new_expiry is not None
+            if has_change:
                 conn.commit()
                 # 通知 s-ui 重载
                 notify_sui_change(conn, "save", {

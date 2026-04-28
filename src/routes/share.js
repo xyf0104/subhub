@@ -173,41 +173,75 @@ router.post('/', requireAuth, (req, res) => {
  */
 router.put('/:id', requireAuth, async (req, res) => {
   try {
-    const { trafficLimitGB, expireDays, expireAt, suiInboundIds, ...rest } = req.body;
+    const { trafficLimitGB, expireDays, expireAt, suiInboundIds, nodeOverrides, ...rest } = req.body;
     const updates = { ...rest };
 
-    if (trafficLimitGB !== undefined) {
-      updates.trafficLimit = Math.round(trafficLimitGB * 1073741824);
-    }
-    if (expireDays) {
-      updates.expireAt = new Date(Date.now() + expireDays * 86400000).toISOString();
-    } else if (expireAt) {
-      updates.expireAt = expireAt;
+    // NOTE: 后端防线 — 过滤掉前端可能误传的纯数字 s-ui inbound ID
+    if (updates.nodeIds && Array.isArray(updates.nodeIds)) {
+      updates.nodeIds = updates.nodeIds.filter(id => id.includes('-'));
     }
 
-    // 保存 s-ui 入站 ID 到分享数据
+    // NOTE: trafficLimitGB=0 或 undefined 表示无限
+    if (trafficLimitGB !== undefined) {
+      updates.trafficLimit = trafficLimitGB > 0 ? Math.round(trafficLimitGB * 1073741824) : 0;
+    }
+    // NOTE: expireAt=null 表示清除到期（永久有效）
+    if (expireDays) {
+      updates.expireAt = new Date(Date.now() + expireDays * 86400000).toISOString();
+    } else if (expireAt !== undefined) {
+      updates.expireAt = expireAt; // null = 永久
+    }
+
     if (suiInboundIds !== undefined) {
       updates.suiInboundIds = suiInboundIds;
     }
+
+    // NOTE: 存储 per-share 节点覆盖配置（仅影响此分享的订阅输出）
+    if (nodeOverrides !== undefined) {
+      updates.nodeOverrides = nodeOverrides;
+    }
+
+    // NOTE: 在更新前获取旧分享数据，检测标题是否变更
+    const oldShare = nodeManager.getShareById(req.params.id);
+    const oldTitle = oldShare ? oldShare.suiClientName : null;
 
     const updated = nodeManager.updateShare(req.params.id, updates);
     if (!updated) {
       return res.status(404).json({ success: false, error: '分享不存在' });
     }
 
-    // NOTE: 如果分享关联了 s-ui 用户且指定了入站 ID，同步到桥接
-    if (updated.suiClientName && suiInboundIds !== undefined) {
-      try {
-        await suiBridgeRequest('PUT', `/api/clients/${encodeURIComponent(updated.suiClientName)}`, {
-          inboundIds: suiInboundIds,
-        });
-      } catch (e) {
-        // 桥接同步失败不阻塞响应
-        console.error(`[Share] s-ui 入站同步失败: ${e.message}`);
+    // NOTE: 先返回响应，s-ui bridge 同步在后台异步执行（避免卡顿）
+    res.json({ success: true, share: updated });
+
+    // 异步同步到 s-ui bridge（名称 + 入站权限 + 流量 + 到期时间）
+    if (oldTitle) {
+      const bridgeBody = {};
+
+      // 标题变更 → 同步重命名 s-ui 用户
+      if (updates.title && updates.title !== oldTitle) {
+        bridgeBody.newName = updates.title;
+      }
+
+      if (suiInboundIds !== undefined) bridgeBody.inboundIds = suiInboundIds;
+      if (trafficLimitGB !== undefined) {
+        bridgeBody.volume = trafficLimitGB > 0 ? Math.round(trafficLimitGB * 1073741824) : 0;
+      }
+      if (updates.expireAt !== undefined) {
+        bridgeBody.expiry = updates.expireAt ? Math.floor(new Date(updates.expireAt).getTime() / 1000) : 0;
+      }
+
+      if (Object.keys(bridgeBody).length > 0) {
+        // NOTE: 用旧名（oldTitle）查找 bridge 中的客户端
+        suiBridgeRequest('PUT', `/api/clients/${encodeURIComponent(oldTitle)}`, bridgeBody)
+          .then(() => {
+            // 改名成功后更新本地 suiClientName
+            if (bridgeBody.newName) {
+              nodeManager.updateShare(req.params.id, { suiClientName: bridgeBody.newName });
+            }
+          })
+          .catch(e => console.error(`[Share] s-ui 同步失败: ${e.message}`));
       }
     }
-
-    res.json({ success: true, share: updated });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -320,7 +354,13 @@ module.exports.shareSubscribeHandler = async (req, res) => {
     const shareNodes = share.nodeIds
       .filter(id => !id.startsWith('sui_'))
       .map(id => allNodes.find(n => n.id === id))
-      .filter(n => n && n.enabled !== false);
+      .filter(n => n && n.enabled !== false)
+      .map(n => {
+        // NOTE: 应用 per-share 节点覆盖配置（仅改变此订阅的输出，不影响原始数据）
+        const ov = (share.nodeOverrides || {})[n.id];
+        if (ov) return { ...n, ...ov };
+        return n;
+      });
 
     // 2. s-ui 用户节点（动态拉取，按 suiInboundIds 过滤）
     // NOTE: inbound ID 与协议的映射: 1=hysteria2, 2=tuic, 3=vless, 4=trojan

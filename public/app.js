@@ -761,11 +761,11 @@ async function loadShares() {
             <span>📅 ${new Date(s.createdAt).toLocaleDateString('zh-CN')} 创建</span>
           </div>
         </div>
-        <div class="sub-source-actions" style="flex-direction:column;gap:4px;">
+        <div class="sub-source-actions">
           <button class="btn btn-secondary btn-sm" onclick="showShareLinks('${s.token}','${esc(s.title)}')">📋 链接</button>
           <button class="btn btn-secondary btn-sm" onclick="openEditShare('${s.id}')">✏️ 编辑</button>
-          <button class="btn btn-secondary btn-sm" onclick="showQR('${url}','${esc(s.title)}')">📱</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteShare('${s.id}')">🗑</button>
+          <button class="btn btn-secondary btn-sm" onclick="showQR('${url}','${esc(s.title)}')">📱 二维码</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteShare('${s.id}')">🗑 删除</button>
         </div>
       </div>`;
     }).join('');
@@ -793,8 +793,10 @@ const SUI_INBOUNDS = [
  * 生成 s-ui 入站选择区域 HTML
  * @param checkedIds 已勾选的入站 ID 数组，null 表示全不选
  */
-function renderSuiInboundSelector(checkedIds, inputName = 'suiInbound') {
+function renderSuiInboundSelector(checkedIds, inputName = 'suiInbound', containerId = '') {
   const checked = new Set(checkedIds || []);
+  // NOTE: containerId 用于 onchange 回调刷新计数
+  const changeHandler = containerId ? ` onchange="onShareCheckChange('${containerId}')"` : '';
   return `
     <div style="margin-top:12px;padding:12px;background:var(--bg-input);border-radius:8px;border:1px solid var(--border-color);">
       <div style="font-weight:600;margin-bottom:8px;">🇯🇵 日本服务器入站（勾选后自动创建独立用户）</div>
@@ -802,8 +804,8 @@ function renderSuiInboundSelector(checkedIds, inputName = 'suiInbound') {
         仅勾选你想分享的协议，s-ui 用户只会拥有对应入站权限
       </p>
       ${SUI_INBOUNDS.map(ib => `
-        <label class="share-node-item">
-          <input type="checkbox" name="${inputName}" value="${ib.id}" ${checked.has(ib.id) ? 'checked' : ''}>
+        <label class="share-node-item sui-inbound-item">
+          <input type="checkbox" name="${inputName}" value="${ib.id}" ${checked.has(ib.id) ? 'checked' : ''}${changeHandler}>
           <span>🇯🇵</span>
           <span>${ib.name}</span>
           <span class="type-badge ${ib.type==='hysteria2'?'hy2':ib.type}" style="font-size:0.72rem;">${ib.type}</span>
@@ -872,7 +874,7 @@ function buildShareNodeSelector(containerId, inputName, nodes, checkedSet, suiIn
       </div>
     </div>
     <div class="share-node-grid">${allNodeItems}</div>
-    ${renderSuiInboundSelector(suiInboundIds, suiInputName)}
+    ${renderSuiInboundSelector(suiInboundIds, suiInputName, containerId)}
   `;
   // NOTE: 用实际 DOM 勾选数刷新计数，checkedSet 可能含不在列表中的 sui_ 节点
   onShareCheckChange(containerId);
@@ -914,9 +916,11 @@ function applyShareFilter(containerId) {
  */
 function onShareCheckChange(containerId) {
   const container = document.getElementById(containerId);
-  const count = container.querySelectorAll('.share-node-item input:checked').length;
+  // NOTE: 用 class 区分普通节点和 s-ui 入站，避免 name 大小写问题
+  const nodeCount = [...container.querySelectorAll('.share-node-item:not(.sui-inbound-item) input:checked')].length;
+  const suiCount = [...container.querySelectorAll('.sui-inbound-item input:checked')].length;
   const countEl = container.querySelector('.share-checked-count');
-  if (countEl) countEl.textContent = count;
+  if (countEl) countEl.textContent = nodeCount + suiCount;
 }
 
 /**
@@ -938,7 +942,9 @@ function toggleVisibleShareNodes(containerId, checked) {
  */
 function getShareCheckedIds(containerId) {
   const container = document.getElementById(containerId);
-  return [...container.querySelectorAll('.share-node-item input:checked')].map(i => i.value);
+  // NOTE: 用 :not(.sui-inbound-item) 排除 s-ui checkbox，避免 name 大小写问题
+  return [...container.querySelectorAll('.share-node-item:not(.sui-inbound-item) input:checked')]
+    .map(i => i.value);
 }
 
 async function submitShare() {
@@ -1016,17 +1022,62 @@ let _editShareFilter = { sub: 'all', search: '' };
 /**
  * 打开编辑分享弹窗（带筛选搜索）
  */
+// NOTE: 当前编辑中的分享 ID 和 nodeOverrides 缓存
+let _currentEditShareId = '';
+let _currentNodeOverrides = {};
+
 async function openEditShare(shareId) {
   try {
-    const [sharesData, nodesData, subsData] = await Promise.all([
-      api('/shares'), api('/nodes'), api('/subscriptions')
-    ]);
+    const sharesData = await api('/shares');
+    if (!_editShareNodes.length) {
+      const nodesData = await api('/nodes');
+      _editShareNodes = nodesData.nodes;
+    }
+    if (!_allSubs.length) {
+      const subsData = await api('/subscriptions');
+      _allSubs = subsData.subscriptions || [];
+    }
     const share = sharesData.shares.find(s => s.id === shareId);
     if (!share) return toast('分享不存在', 'error');
 
-    _editShareNodes = nodesData.nodes;
-    _allSubs = subsData.subscriptions || [];
+    _currentEditShareId = shareId;
+    _currentNodeOverrides = share.nodeOverrides ? JSON.parse(JSON.stringify(share.nodeOverrides)) : {};
+
     const currentIds = new Set(share.nodeIds || []);
+    const trafficGB = share.trafficLimit > 0 ? (share.trafficLimit / 1073741824).toFixed(1) : '';
+    const expireDate = share.expireAt ? new Date(share.expireAt).toISOString().split('T')[0] : '';
+
+    const flags = {JP:'🇯🇵',HK:'🇭🇰',SG:'🇸🇬',US:'🇺🇸',TW:'🇹🇼',KR:'🇰🇷',UK:'🇬🇧',DE:'🇩🇪',FR:'🇫🇷',CA:'🇨🇦',AU:'🇦🇺'};
+    const selectedNodes = _editShareNodes.filter(n => currentIds.has(n.id));
+    const selectedSui = SUI_INBOUNDS.filter(ib => (share.suiInboundIds || []).includes(ib.id));
+
+    const selectedHtml = (selectedNodes.length + selectedSui.length) > 0 ? `
+      <div class="selected-nodes-section">
+        <h5>✅ 已分享的节点（${selectedNodes.length + selectedSui.length} 个）</h5>
+        ${selectedNodes.map(n => {
+          const ov = _currentNodeOverrides[n.id];
+          const displayName = ov?.name || n.name;
+          return `
+          <div class="selected-node-row" id="sel-node-${n.id}">
+            <span>${flags[n.region]||'🌍'}</span>
+            <span class="node-name">${esc(displayName)}${ov ? ' <span style="color:var(--accent);font-size:0.7rem;">已定制</span>' : ''}</span>
+            <span class="type-badge ${n.type==='hysteria2'?'hy2':n.type}" style="font-size:0.7rem;">${n.type}</span>
+            <div class="node-actions">
+              <button class="btn btn-secondary" onclick="testShareNode('${n.id}')">⚡ 测速</button>
+              <button class="btn btn-secondary" onclick="editShareNodeOverride('${n.id}','${shareId}')">✏️ 编辑</button>
+            </div>
+          </div>`;
+        }).join('')}
+        ${selectedSui.map(ib => `
+          <div class="selected-node-row">
+            <span>🇯🇵</span>
+            <span class="node-name">${ib.name}（自建）</span>
+            <span class="type-badge ${ib.type==='hysteria2'?'hy2':ib.type}" style="font-size:0.7rem;">${ib.type}</span>
+            <div class="node-actions">
+              <button class="btn btn-secondary" disabled>⚡ 测速</button>
+            </div>
+          </div>`).join('')}
+      </div>` : '';
 
     let modal = document.getElementById('editShareModal');
     if (!modal) {
@@ -1039,6 +1090,27 @@ async function openEditShare(shareId) {
       <div class="modal modal-compact" style="max-width:90vw;width:800px;">
         <div class="modal-header" style="padding:12px 16px;"><h3 style="margin:0;font-size:1rem;">编辑分享 - ${esc(share.title)}</h3><button class="modal-close" onclick="closeModal('editShareModal')">✕</button></div>
         <div class="modal-body" style="padding:8px 16px 12px;">
+          <div class="edit-share-form">
+            <div class="form-group">
+              <label>📝 分享标题</label>
+              <input class="form-input" id="editShareTitle" value="${esc(share.title)}" placeholder="用户名称">
+            </div>
+            <div class="form-group">
+              <label>📊 流量限制 (GB)</label>
+              <div class="input-with-btn">
+                <input class="form-input" id="editShareTraffic" type="number" step="0.1" value="${trafficGB}" placeholder="留空=不限">
+                <button type="button" class="btn-infinity" title="设为无限" onclick="document.getElementById('editShareTraffic').value='';toast('流量已设为无限','success')">♾️</button>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>⏰ 到期日期</label>
+              <div class="input-with-btn">
+                <input class="form-input" id="editShareExpire" type="date" value="${expireDate}">
+                <button type="button" class="btn-infinity" title="设为永久" onclick="document.getElementById('editShareExpire').value='';toast('已设为永久有效','success')">♾️</button>
+              </div>
+            </div>
+          </div>
+          ${selectedHtml}
           <div id="editShareNodeList" class="share-node-list"></div>
         </div>
         <div class="modal-footer" style="padding:8px 16px;">
@@ -1047,31 +1119,173 @@ async function openEditShare(shareId) {
         </div>
       </div>`;
 
-    // NOTE: 传入已保存的 s-ui 入站 ID，回显勾选状态
     buildShareNodeSelector('editShareNodeList', 'editShareNode', _editShareNodes, currentIds, share.suiInboundIds || []);
     modal.classList.add('active');
   } catch (e) { toast(e.message, 'error'); }
 }
 
 /**
- * 提交编辑分享（节点 + s-ui 入站权限同步）
+ * 测速指定节点（利用服务器网络）
+ */
+async function testShareNode(nodeId) {
+  const row = document.getElementById('sel-node-' + nodeId);
+  const btn = row?.querySelector('.node-actions button');
+  if (btn) { btn.textContent = '⏳ 测速中...'; btn.disabled = true; }
+  try {
+    // NOTE: API 返回 { success, result: { tcp: { avgLatency } } }
+    const data = await api(`/nodes/${nodeId}/test`, { method: 'POST' });
+    const ms = data.result?.tcp?.avgLatency;
+    if (btn) {
+      btn.textContent = ms > 0 ? `✅ ${ms}ms` : '❌ 超时';
+      btn.disabled = false;
+      setTimeout(() => { btn.textContent = '⚡ 测速'; }, 8000);
+    }
+  } catch (e) {
+    if (btn) { btn.textContent = '❌ 失败'; btn.disabled = false; }
+  }
+}
+
+/**
+ * 编辑单个节点的覆盖配置（仅对此分享有效）
+ */
+function editShareNodeOverride(nodeId, shareId) {
+  const node = _editShareNodes.find(n => n.id === nodeId);
+  if (!node) return toast('节点不存在', 'error');
+
+  // 合并原始节点数据和已有覆盖
+  const ov = _currentNodeOverrides[nodeId] || {};
+  const vals = { ...node, ...ov };
+
+  let overrideModal = document.getElementById('nodeOverrideModal');
+  if (!overrideModal) {
+    overrideModal = document.createElement('div');
+    overrideModal.id = 'nodeOverrideModal';
+    overrideModal.className = 'modal-overlay';
+    document.body.appendChild(overrideModal);
+  }
+
+  overrideModal.innerHTML = `
+    <div class="modal" style="max-width:500px;width:90vw;">
+      <div class="modal-header"><h3 style="margin:0;font-size:1rem;">✏️ 节点配置覆盖（仅此分享）</h3><button class="modal-close" onclick="closeModal('nodeOverrideModal')">✕</button></div>
+      <div class="modal-body" style="padding:12px 16px;">
+        <p style="font-size:0.78rem;color:var(--text-muted);margin:0 0 12px;">修改仅影响「${esc(node.name)}」在此分享链接的输出，不影响其他分享和节点管理</p>
+        <div class="node-edit-form">
+          <div class="form-group">
+            <label>节点名称</label>
+            <input class="form-input" id="ovName" value="${esc(vals.name)}" placeholder="${esc(node.name)}">
+          </div>
+          <div class="form-group">
+            <label>节点类型</label>
+            <input class="form-input" id="ovType" value="${vals.type}" readonly style="opacity:0.6;">
+          </div>
+          <div class="form-group">
+            <label>服务器地址</label>
+            <input class="form-input" id="ovServer" value="${esc(vals.server||'')}" placeholder="IP 或域名">
+          </div>
+          <div class="form-group">
+            <label>端口</label>
+            <input class="form-input" id="ovPort" type="number" value="${vals.port||''}" placeholder="端口">
+          </div>
+          <div class="form-group">
+            <label>UUID / 密码</label>
+            <input class="form-input" id="ovPassword" value="${esc(vals.uuid||vals.password||'')}" placeholder="认证凭据">
+          </div>
+          <div class="form-group">
+            <label>SNI / Host</label>
+            <input class="form-input" id="ovSni" value="${esc(vals.sni||vals.host||'')}" placeholder="TLS SNI">
+          </div>
+          <div class="form-group full-width" style="margin-top:4px;">
+            <button class="btn btn-secondary btn-sm" onclick="clearNodeOverride('${nodeId}')">🔄 恢复默认</button>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" style="padding:8px 16px;">
+        <button class="btn btn-secondary" onclick="closeModal('nodeOverrideModal')">取消</button>
+        <button class="btn btn-primary" onclick="saveNodeOverride('${nodeId}')">确认覆盖</button>
+      </div>
+    </div>`;
+  overrideModal.classList.add('active');
+}
+
+/**
+ * 保存节点覆盖配置到内存（最终随 submitEditShare 一起提交）
+ */
+function saveNodeOverride(nodeId) {
+  const node = _editShareNodes.find(n => n.id === nodeId);
+  const override = {};
+  const name = document.getElementById('ovName').value.trim();
+  const server = document.getElementById('ovServer').value.trim();
+  const port = parseInt(document.getElementById('ovPort').value);
+  const password = document.getElementById('ovPassword').value.trim();
+  const sni = document.getElementById('ovSni').value.trim();
+
+  // NOTE: 只记录与原始值不同的字段
+  if (name && name !== node.name) override.name = name;
+  if (server && server !== node.server) override.server = server;
+  if (port && port !== node.port) override.port = port;
+  if (password && password !== (node.uuid || node.password)) {
+    if (node.uuid) override.uuid = password;
+    else override.password = password;
+  }
+  if (sni && sni !== (node.sni || node.host)) {
+    if (node.sni !== undefined) override.sni = sni;
+    else override.host = sni;
+  }
+
+  if (Object.keys(override).length > 0) {
+    _currentNodeOverrides[nodeId] = { ...(_currentNodeOverrides[nodeId] || {}), ...override };
+    // 更新已选节点的显示名称
+    const nameEl = document.querySelector(`#sel-node-${nodeId} .node-name`);
+    if (nameEl) nameEl.innerHTML = `${esc(override.name || node.name)} <span style="color:var(--accent);font-size:0.7rem;">已定制</span>`;
+    toast('覆盖配置已暂存（保存分享后生效）', 'success');
+  } else {
+    delete _currentNodeOverrides[nodeId];
+    toast('无变更', 'info');
+  }
+  closeModal('nodeOverrideModal');
+}
+
+/**
+ * 清除节点覆盖，恢复默认
+ */
+function clearNodeOverride(nodeId) {
+  delete _currentNodeOverrides[nodeId];
+  const node = _editShareNodes.find(n => n.id === nodeId);
+  const nameEl = document.querySelector(`#sel-node-${nodeId} .node-name`);
+  if (nameEl && node) nameEl.textContent = node.name;
+  toast('已恢复默认配置', 'success');
+  closeModal('nodeOverrideModal');
+}
+
+/**
+ * 提交编辑分享（标题/流量/到期 + 节点 + s-ui + nodeOverrides）
  */
 async function submitEditShare(shareId) {
-  // NOTE: 从 DOM 读取所有勾选节点（所有节点始终在 DOM 中）
   const nodeIds = getShareCheckedIds('editShareNodeList');
   const suiInboundIds = [...document.querySelectorAll('input[name=editSuiInbound]:checked')].map(i => parseInt(i.value));
+  const title = document.getElementById('editShareTitle').value.trim();
+  const trafficVal = document.getElementById('editShareTraffic').value;
+  const expireDate = document.getElementById('editShareExpire').value;
 
   if (nodeIds.length === 0 && suiInboundIds.length === 0) return toast('请至少选择一个节点', 'error');
+  if (!title) return toast('请填写标题', 'error');
+
+  // NOTE: trafficLimitGB=0 表示无限；留空也表示无限
+  const trafficLimitGB = trafficVal === '' ? 0 : parseFloat(trafficVal) || 0;
+
   try {
     await api(`/shares/${shareId}`, {
       method: 'PUT',
       body: JSON.stringify({
+        title,
         nodeIds,
-        // NOTE: 始终传入 suiInboundIds（包括空数组），后端收到后才会更新
         suiInboundIds,
+        trafficLimitGB,
+        expireAt: expireDate ? new Date(expireDate + 'T23:59:59').toISOString() : null,
+        nodeOverrides: Object.keys(_currentNodeOverrides).length > 0 ? _currentNodeOverrides : undefined,
       })
     });
-    toast('已更新节点，s-ui 权限已同步', 'success');
+    toast('分享已更新', 'success');
     closeModal('editShareModal');
     loadShares();
   } catch (e) { toast(e.message, 'error'); }

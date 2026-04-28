@@ -320,7 +320,7 @@ router.get('/stats', requireAuth, (req, res) => {
 router.get('/traffic', requireAuth, async (req, res) => {
   try {
     const http = require('http');
-    const SUI_BRIDGE_TOKEN = 'subhub_bridge_a73b3ab2';
+    const SUI_BRIDGE_TOKEN = process.env.SUI_BRIDGE_TOKEN || 'subhub_bridge_change_me';
 
     const data = await new Promise((resolve, reject) => {
       const opts = {

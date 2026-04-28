@@ -379,16 +379,43 @@ textarea.form-input {
 /* ---- Sub Sources ---- */
 .sub-source-card {
   background: var(--bg-card); border: 1px solid var(--border-color);
-  border-radius: var(--radius-md); padding: 18px 22px; margin-bottom: 12px;
-  display: flex; align-items: center; justify-content: space-between;
+  border-radius: var(--radius-md); padding: 16px 20px; margin-bottom: 10px;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
   box-shadow: var(--shadow-sm); transition: all 0.15s ease;
 }
 .sub-source-card:hover { border-color: var(--border-hover); box-shadow: var(--shadow-md); }
-.sub-source-info h4 { font-size: 1.05rem; font-weight: 600; margin-bottom: 6px; }
-.sub-source-info p { font-size: 0.85rem; color: var(--text-muted); font-family: 'SF Mono', monospace; word-break: break-all; }
-.sub-source-meta { display: flex; gap: 16px; margin-top: 6px; }
-.sub-source-meta span { font-size: 0.85rem; color: var(--text-secondary); }
-.sub-source-actions { display: flex; gap: 8px; flex-shrink: 0; margin-left: 16px; }
+.sub-source-info { flex: 1; min-width: 0; }
+.sub-source-info h4 { font-size: 1.05rem; font-weight: 600; margin-bottom: 4px; }
+.sub-source-info p { font-size: 0.82rem; color: var(--text-muted); font-family: 'SF Mono', monospace; word-break: break-all; margin-bottom: 2px; }
+.sub-source-meta { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 2px; }
+.sub-source-meta span { font-size: 0.82rem; color: var(--text-secondary); }
+/* NOTE: 按钮在右侧水平一字排开 */
+.sub-source-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.sub-source-actions .btn { white-space: nowrap; }
+
+/* 编辑弹窗 - 表单区域 */
+.edit-share-form { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color); }
+.edit-share-form .form-group { display: flex; flex-direction: column; gap: 4px; }
+.edit-share-form .form-group label { font-size: 0.78rem; color: var(--text-muted); }
+.edit-share-form .form-group input { padding: 6px 10px; font-size: 0.85rem; }
+.edit-share-form .input-with-btn { display: flex; gap: 4px; align-items: center; }
+.edit-share-form .input-with-btn input { flex: 1; min-width: 0; }
+.edit-share-form .input-with-btn .btn-infinity { padding: 4px 8px; font-size: 0.85rem; cursor: pointer; background: var(--bg-input); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-secondary); }
+.edit-share-form .input-with-btn .btn-infinity:hover { color: var(--accent); border-color: var(--accent); }
+/* 已选节点置顶区域 */
+.selected-nodes-section { margin-bottom: 12px; padding: 10px; background: var(--bg-input); border-radius: 8px; border: 1px solid var(--accent); }
+.selected-nodes-section h5 { font-size: 0.85rem; font-weight: 600; margin: 0 0 8px; color: var(--accent); }
+.selected-node-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--border-color); }
+.selected-node-row:last-child { border-bottom: none; }
+.selected-node-row .node-name { flex: 1; font-size: 0.85rem; }
+.selected-node-row .node-actions { display: flex; gap: 4px; }
+.selected-node-row .btn { padding: 2px 8px; font-size: 0.72rem; }
+/* 节点编辑弹窗 */
+.node-edit-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.node-edit-form .form-group { display: flex; flex-direction: column; gap: 4px; }
+.node-edit-form .form-group.full-width { grid-column: 1 / -1; }
+.node-edit-form .form-group label { font-size: 0.78rem; color: var(--text-muted); }
+.node-edit-form .form-group input { padding: 6px 10px; font-size: 0.85rem; }
 
 /* ---- Toast ---- */
 .toast-container { position: fixed; top: 18px; right: 18px; z-index: 9999; display: flex; flex-direction: column; gap: 10px; }

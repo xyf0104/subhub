@@ -41,6 +41,10 @@ const AI_COPILOT = [
   'DOMAIN-SUFFIX,edgeservices.bing.com','DOMAIN-SUFFIX,copilot.cloud.microsoft',
 ];
 
+const AI_KIRO = [
+  'DOMAIN-SUFFIX,kiro.dev',
+];
+
 const AI_OTHER = [
   'DOMAIN-SUFFIX,x.ai','DOMAIN-SUFFIX,grok.x.ai',
   'DOMAIN-SUFFIX,meta.ai','DOMAIN-SUFFIX,llama.meta.com',
@@ -263,6 +267,7 @@ function getClashRules() {
   add(AI_CLAUDE, '🧠 Claude');
   add(AI_GEMINI, '💎 Gemini');
   add(AI_COPILOT, '🪟 Copilot');
+  add(AI_KIRO, '🛠 Kiro');
   add(AI_OTHER, '🔮 AI其他');
 
   // Streaming
@@ -300,6 +305,7 @@ function getProxyGroups() {
     { name: '🧠 Claude', type: 'select', extra: ['🚀 节点选择', '♻️ 自动选优'], useRegion: true, useAll: true },
     { name: '💎 Gemini', type: 'select', extra: ['🚀 节点选择', '♻️ 自动选优'], useRegion: true, useAll: true },
     { name: '🪟 Copilot', type: 'select', extra: ['🚀 节点选择', '♻️ 自动选优'], useRegion: true, useAll: true },
+    { name: '🛠 Kiro', type: 'select', extra: ['🚀 节点选择', '♻️ 自动选优'], useRegion: true, useAll: true },
     { name: '🔮 AI其他', type: 'select', extra: ['🚀 节点选择', '♻️ 自动选优'], useRegion: true, useAll: true },
 
     // Streaming (5 groups)
@@ -358,7 +364,7 @@ function getSingboxRuleCategories() {
 
 module.exports = {
   getClashRules, getProxyGroups, getRegionGroups, getSingboxRuleCategories,
-  REJECT_DOMAINS, AI_OPENAI, AI_CLAUDE, AI_GEMINI, AI_COPILOT, AI_OTHER,
+  REJECT_DOMAINS, AI_OPENAI, AI_CLAUDE, AI_GEMINI, AI_COPILOT, AI_KIRO, AI_OTHER,
   YOUTUBE, NETFLIX, DISNEY, SPOTIFY, STREAMING_OTHER,
   TELEGRAM, TWITTER, SOCIAL_OTHER,
   GOOGLE, DEV, GAMING, APPLE, MICROSOFT, DIRECT_DOMAINS, PROXY_GENERAL, PRIVATE_RULES,

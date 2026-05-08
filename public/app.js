@@ -843,12 +843,20 @@ function renderSuiInboundSelector(checkedMap, inputName = 'suiInbound', containe
     const flag = regionFlags[region] || '🌍';
     const label = regionLabels[region] || region.toUpperCase();
     const checkedSet = checked[region] || new Set();
-    const existingTraffic = trafficMap[region]?.trafficLimitGB || '';
+    const regionData = trafficMap[region] || {};
+    const existingTraffic = regionData.trafficLimitGB || '';
+    // NOTE: 回显到期日期（从 expireAt 或 expireDays 计算）
+    let existingExpire = '';
+    if (regionData.expireAt) {
+      existingExpire = new Date(regionData.expireAt).toISOString().split('T')[0];
+    } else if (regionData.expireDays) {
+      existingExpire = new Date(Date.now() + regionData.expireDays * 86400000).toISOString().split('T')[0];
+    }
     return `
     <div style="margin-top:12px;padding:12px;background:var(--bg-input);border-radius:8px;border:1px solid var(--border-color);">
-      <div style="font-weight:600;margin-bottom:8px;">${flag} ${label}服务器入站（勾选后自动创建独立用户）</div>
+      <div style="font-weight:600;margin-bottom:8px;">${flag} ${label}自建节点</div>
       <p style="font-size:0.8rem;color:var(--text-muted);margin:0 0 8px;">
-        仅勾选你想分享的协议，s-ui 用户只会拥有对应入站权限
+        勾选入站协议，保存后自动同步到${label} s-ui 服务器
       </p>
       ${inbounds.map(ib => `
         <label class="share-node-item sui-inbound-item" data-region="${region}">
@@ -857,10 +865,17 @@ function renderSuiInboundSelector(checkedMap, inputName = 'suiInbound', containe
           <span>${esc(ib.name)}</span>
           <span class="type-badge ${ib.type==='hysteria2'?'hy2':ib.type}" style="font-size:0.72rem;">${ib.type}</span>
         </label>`).join('')}
-      <div style="margin-top:8px;display:flex;align-items:center;gap:8px;">
-        <label style="font-size:0.82rem;color:var(--text-muted);white-space:nowrap;">📊 ${label}流量 (GB):</label>
-        <input type="number" class="sui-region-traffic" data-region="${region}" value="${existingTraffic}" placeholder="不限" step="1" min="0"
-          style="width:100px;padding:4px 8px;border-radius:6px;border:1px solid var(--border-color);background:var(--bg-card);color:var(--text-primary);font-size:0.85rem;">
+      <div style="margin-top:10px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+        <div style="display:flex;align-items:center;gap:6px;">
+          <label style="font-size:0.82rem;color:var(--text-muted);white-space:nowrap;">📊 流量(GB):</label>
+          <input type="number" class="sui-region-traffic" data-region="${region}" value="${existingTraffic}" placeholder="不限" step="1" min="0"
+            style="width:80px;padding:4px 8px;border-radius:6px;border:1px solid var(--border-color);background:var(--bg-card);color:var(--text-primary);font-size:0.85rem;">
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <label style="font-size:0.82rem;color:var(--text-muted);white-space:nowrap;">⏰ 到期:</label>
+          <input type="date" class="sui-region-expire" data-region="${region}" value="${existingExpire}"
+            style="padding:4px 8px;border-radius:6px;border:1px solid var(--border-color);background:var(--bg-card);color:var(--text-primary);font-size:0.85rem;">
+        </div>
       </div>
     </div>`;
   }).join('');
@@ -1028,8 +1043,8 @@ async function submitShare() {
 }
 
 /**
- * 按 region 分组收集勾选的入站 ID + 区域独立流量
- * @returns { jp: { inboundIds: [3,5], trafficLimitGB: 100 }, us: { inboundIds: [2], trafficLimitGB: 50 } }
+ * 按 region 分组收集勾选的入站 ID + 区域独立流量/到期
+ * @returns { jp: { inboundIds: [3,5], trafficLimitGB: 100, expireAt: '...' }, us: { ... } }
  */
 function collectSuiBridges(inputName) {
   const result = {};
@@ -1048,6 +1063,15 @@ function collectSuiBridges(inputName) {
     const val = parseFloat(input.value);
     if (val > 0) {
       result[region].trafficLimitGB = val;
+    }
+  }
+  // NOTE: 收集每个区域的独立到期日期
+  const expireInputs = document.querySelectorAll('.sui-region-expire');
+  for (const input of expireInputs) {
+    const region = input.dataset.region;
+    if (!region || !result[region]) continue;
+    if (input.value) {
+      result[region].expireAt = new Date(input.value + 'T23:59:59').toISOString();
     }
   }
   return result;

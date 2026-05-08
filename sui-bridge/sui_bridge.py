@@ -180,9 +180,19 @@ class BridgeHandler(BaseHTTPRequestHandler):
             rows = conn.execute("SELECT id, enable, name, config, volume, expiry, down, up FROM clients").fetchall()
             clients = []
             for r in rows:
-                config = json.loads(r[3]) if r[3] else {}
+                raw = r[3]
+                if isinstance(raw, bytes):
+                    raw = raw.decode()
+                config = json.loads(raw) if raw else {}
+                # NOTE: 兼容两种 config 格式
+                # s-ui 原生格式: { vless: { uuid }, hysteria2: { password }, ... }
+                # bridge 创建格式: { id, password }
                 password = config.get("password", "")
                 uid = config.get("id", "")
+                if not password and "hysteria2" in config:
+                    password = config["hysteria2"].get("password", "")
+                if not uid and "vless" in config:
+                    uid = config["vless"].get("uuid", "")
                 # NOTE: 实时动态生成 links，不依赖数据库中的历史值
                 links = get_client_links(r[2], password, uid)
                 clients.append({

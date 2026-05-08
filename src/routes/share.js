@@ -182,14 +182,18 @@ router.post('/', requireAuth, (req, res) => {
 
         // NOTE: 每个区域使用独立的流量/到期设置，回退到全局设置
         const regionTraffic = config.trafficLimitGB !== undefined ? config.trafficLimitGB : trafficLimitGB;
-        const regionExpireDays = config.expireDays !== undefined ? config.expireDays : expireDays;
 
         const suiBody = { name: safeName, inboundIds };
         if (regionTraffic) {
           suiBody.volume = Math.round(regionTraffic * 1073741824);
         }
-        if (regionExpireDays) {
-          suiBody.expiry = Math.floor((Date.now() + regionExpireDays * 86400000) / 1000);
+        // 到期优先级: 区域 expireAt > 区域 expireDays > 全局 expireDays
+        if (config.expireAt) {
+          suiBody.expiry = Math.floor(new Date(config.expireAt).getTime() / 1000);
+        } else if (config.expireDays) {
+          suiBody.expiry = Math.floor((Date.now() + config.expireDays * 86400000) / 1000);
+        } else if (expireDays) {
+          suiBody.expiry = Math.floor((Date.now() + expireDays * 86400000) / 1000);
         }
 
         console.log(`[Share] 调用 ${region} bridge 创建用户:`, safeName);
@@ -204,7 +208,7 @@ router.post('/', requireAuth, (req, res) => {
         suiBridges[region] = {
           clientName: safeName, inboundIds,
           trafficLimitGB: regionTraffic || undefined,
-          expireDays: regionExpireDays || undefined,
+          expireAt: config.expireAt || undefined,
         };
         console.log(`[Share] ${region} s-ui 用户创建成功:`, safeName);
       }
@@ -289,7 +293,10 @@ router.put('/:id', requireAuth, async (req, res) => {
       if (regionTraffic) {
         suiBody.volume = Math.round(regionTraffic * 1073741824);
       }
-      if (updates.expireAt) {
+      // 到期优先级: 区域 expireAt > 全局 expireAt > 旧分享 expireAt
+      if (config.expireAt) {
+        suiBody.expiry = Math.floor(new Date(config.expireAt).getTime() / 1000);
+      } else if (updates.expireAt) {
         suiBody.expiry = Math.floor(new Date(updates.expireAt).getTime() / 1000);
       } else if (oldShare.expireAt) {
         suiBody.expiry = Math.floor(new Date(oldShare.expireAt).getTime() / 1000);
@@ -302,6 +309,7 @@ router.put('/:id', requireAuth, async (req, res) => {
           finalSuiBridges[region] = {
             clientName: safeName, inboundIds,
             trafficLimitGB: regionTraffic || undefined,
+            expireAt: config.expireAt || undefined,
           };
           console.log(`[Share] ${region} s-ui 用户创建成功`);
         } else {
@@ -338,10 +346,18 @@ router.put('/:id', requireAuth, async (req, res) => {
         bridgeBody.inboundIds = newConfig.inboundIds;
         finalSuiBridges[region] = { ...oldInfo, inboundIds: newConfig.inboundIds };
       }
-      if (trafficLimitGB !== undefined) {
+      // NOTE: 优先使用区域独立的流量/到期，回退到全局设置
+      const regionTrafficVal = newConfig?.trafficLimitGB;
+      if (regionTrafficVal !== undefined) {
+        bridgeBody.volume = regionTrafficVal > 0 ? Math.round(regionTrafficVal * 1073741824) : 0;
+        finalSuiBridges[region] = { ...finalSuiBridges[region], trafficLimitGB: regionTrafficVal || undefined };
+      } else if (trafficLimitGB !== undefined) {
         bridgeBody.volume = trafficLimitGB > 0 ? Math.round(trafficLimitGB * 1073741824) : 0;
       }
-      if (updates.expireAt !== undefined) {
+      if (newConfig?.expireAt) {
+        bridgeBody.expiry = Math.floor(new Date(newConfig.expireAt).getTime() / 1000);
+        finalSuiBridges[region] = { ...finalSuiBridges[region], expireAt: newConfig.expireAt };
+      } else if (updates.expireAt !== undefined) {
         bridgeBody.expiry = updates.expireAt ? Math.floor(new Date(updates.expireAt).getTime() / 1000) : 0;
       }
 

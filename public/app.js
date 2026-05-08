@@ -833,25 +833,10 @@ function renderSuiInboundSelector(checkedMap, inputName = 'suiInbound', containe
     groups[ib.region].push(ib);
   }
 
-  // NOTE: trafficMap 存放每个区域的已有流量配置（编辑时回显）
-  let trafficMap = {};
-  if (checkedMap && !Array.isArray(checkedMap) && typeof checkedMap === 'object') {
-    trafficMap = checkedMap;
-  }
-
   return Object.entries(groups).map(([region, inbounds]) => {
     const flag = regionFlags[region] || '🌍';
     const label = regionLabels[region] || region.toUpperCase();
     const checkedSet = checked[region] || new Set();
-    const regionData = trafficMap[region] || {};
-    const existingTraffic = regionData.trafficLimitGB || '';
-    // NOTE: 回显到期日期（从 expireAt 或 expireDays 计算）
-    let existingExpire = '';
-    if (regionData.expireAt) {
-      existingExpire = new Date(regionData.expireAt).toISOString().split('T')[0];
-    } else if (regionData.expireDays) {
-      existingExpire = new Date(Date.now() + regionData.expireDays * 86400000).toISOString().split('T')[0];
-    }
     return `
     <div style="margin-top:12px;padding:12px;background:var(--bg-input);border-radius:8px;border:1px solid var(--border-color);">
       <div style="font-weight:600;margin-bottom:8px;">${flag} ${label}自建节点</div>
@@ -865,16 +850,42 @@ function renderSuiInboundSelector(checkedMap, inputName = 'suiInbound', containe
           <span>${esc(ib.name)}</span>
           <span class="type-badge ${ib.type==='hysteria2'?'hy2':ib.type}" style="font-size:0.72rem;">${ib.type}</span>
         </label>`).join('')}
-      <div style="margin-top:10px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
-        <div style="display:flex;align-items:center;gap:6px;">
-          <label style="font-size:0.82rem;color:var(--text-muted);white-space:nowrap;">📊 流量(GB):</label>
-          <input type="number" class="sui-region-traffic" data-region="${region}" value="${existingTraffic}" placeholder="不限" step="1" min="0"
-            style="width:80px;padding:4px 8px;border-radius:6px;border:1px solid var(--border-color);background:var(--bg-card);color:var(--text-primary);font-size:0.85rem;">
+    </div>`;
+  }).join('');
+}
+
+/**
+ * 生成区域独立的 s-ui 配置行 HTML（流量 + 到期）
+ * NOTE: 放在编辑/创建模态框的全局配置行下方
+ * @param suiBridgesData 已有的区域配置 { jp: { trafficLimitGB, expireAt }, us: { ... } }
+ */
+function buildRegionConfigRows(suiBridgesData = {}) {
+  const regionFlags = { jp: '🇯🇵', hk: '🇭🇰', sg: '🇸🇬', us: '🇺🇸' };
+  const regionLabels = { jp: '日本', hk: '香港', sg: '新加坡', us: '美国' };
+  // 从 SUI_INBOUNDS 中提取所有存在的区域
+  const regions = [...new Set(SUI_INBOUNDS.map(ib => ib.region))];
+  if (regions.length === 0) return '';
+
+  return regions.map(region => {
+    const flag = regionFlags[region] || '🌍';
+    const label = regionLabels[region] || region.toUpperCase();
+    const data = suiBridgesData[region] || {};
+    const trafficVal = data.trafficLimitGB || '';
+    let expireVal = '';
+    if (data.expireAt) {
+      expireVal = new Date(data.expireAt).toISOString().split('T')[0];
+    }
+    return `
+    <div class="edit-share-form" style="margin-top:6px;padding:8px 0;border-top:1px dashed var(--border-color);">
+      <div style="font-size:0.85rem;font-weight:600;margin-bottom:6px;color:var(--text-secondary);">${flag} ${label} s-ui 配置</div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+        <div class="form-group" style="flex:1;min-width:120px;">
+          <label style="font-size:0.8rem;">📊 ${label}流量 (GB)</label>
+          <input class="form-input sui-region-traffic" data-region="${region}" type="number" step="1" min="0" value="${trafficVal}" placeholder="不限">
         </div>
-        <div style="display:flex;align-items:center;gap:6px;">
-          <label style="font-size:0.82rem;color:var(--text-muted);white-space:nowrap;">⏰ 到期:</label>
-          <input type="date" class="sui-region-expire" data-region="${region}" value="${existingExpire}"
-            style="padding:4px 8px;border-radius:6px;border:1px solid var(--border-color);background:var(--bg-card);color:var(--text-primary);font-size:0.85rem;">
+        <div class="form-group" style="flex:1;min-width:160px;">
+          <label style="font-size:0.8rem;">⏰ ${label}到期</label>
+          <input class="form-input sui-region-expire" data-region="${region}" type="date" value="${expireVal}">
         </div>
       </div>
     </div>`;
@@ -894,6 +905,8 @@ async function openCreateShare() {
     document.getElementById('shareTitle').value = '';
     document.getElementById('shareTraffic').value = '100';
     document.getElementById('shareExpireDays').value = '30';
+    // NOTE: 渲染区域独立的 s-ui 配置行（日本/美国流量+到期）
+    document.getElementById('shareRegionConfigs').innerHTML = buildRegionConfigRows();
     // 默认全选节点，不勾选 s-ui 入站
     buildShareNodeSelector('shareNodeList', 'shareNode', _shareNodes, new Set(_shareNodes.map(n => n.id)), []);
     document.getElementById('shareModal').classList.add('active');
@@ -1225,6 +1238,7 @@ async function openEditShare(shareId) {
               </div>
             </div>
           </div>
+          ${buildRegionConfigRows(suiBridgesData)}
           ${selectedHtml}
           <div id="editShareNodeList" class="share-node-list"></div>
         </div>

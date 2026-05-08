@@ -230,6 +230,7 @@ router.post('/', requireAuth, (req, res) => {
 
 /**
  * 更新分享（多区域版：续期/改流量/改节点/改 s-ui 入站权限）
+ * NOTE: 支持编辑时新增区域（创建用户）、移除区域（删除用户）、更新已有区域
  */
 router.put('/:id', requireAuth, async (req, res) => {
   try {
@@ -250,10 +251,6 @@ router.put('/:id', requireAuth, async (req, res) => {
       updates.expireAt = expireAt;
     }
 
-    if (suiBridgesInput !== undefined) {
-      updates.suiBridges = suiBridgesInput;
-    }
-
     if (nodeOverrides !== undefined) {
       updates.nodeOverrides = nodeOverrides;
     }
@@ -263,31 +260,71 @@ router.put('/:id', requireAuth, async (req, res) => {
       return res.status(404).json({ success: false, error: '分享不存在' });
     }
     const oldBridges = normalizeSuiBridges(oldShare);
+    const newBridges = suiBridgesInput || {};
+    const safeName = (updates.title || oldShare.title).replace(/[^a-zA-Z0-9\u4e00-\u9fff_-]/g, '_').substring(0, 30);
 
-    const updated = nodeManager.updateShare(req.params.id, updates);
-    if (!updated) {
-      return res.status(404).json({ success: false, error: '分享不存在' });
+    // ---- s-ui 同步（同步执行，确保保存前完成） ----
+    const finalSuiBridges = { ...oldBridges };
+
+    // 1. 新增区域 — 在对应 bridge 创建 s-ui 用户
+    for (const [region, config] of Object.entries(newBridges)) {
+      const inboundIds = config.inboundIds || [];
+      if (inboundIds.length === 0) continue;
+      if (oldBridges[region]?.clientName) continue; // 已有用户，跳过（后面更新）
+
+      const bridge = getBridgeConfig(region);
+      if (!bridge) continue;
+
+      const suiBody = { name: safeName, inboundIds };
+      if (trafficLimitGB) {
+        suiBody.volume = Math.round(trafficLimitGB * 1073741824);
+      }
+      if (updates.expireAt) {
+        suiBody.expiry = Math.floor(new Date(updates.expireAt).getTime() / 1000);
+      } else if (oldShare.expireAt) {
+        suiBody.expiry = Math.floor(new Date(oldShare.expireAt).getTime() / 1000);
+      }
+
+      console.log(`[Share] 编辑时新增 ${region} s-ui 用户:`, safeName);
+      try {
+        const result = await suiBridgeRequest(region, 'POST', '/api/clients', suiBody);
+        if (result.success) {
+          finalSuiBridges[region] = { clientName: safeName, inboundIds };
+          console.log(`[Share] ${region} s-ui 用户创建成功`);
+        } else {
+          console.error(`[Share] ${region} s-ui 创建失败:`, result.error);
+        }
+      } catch (e) {
+        console.error(`[Share] ${region} bridge 不可用:`, e.message);
+      }
     }
 
-    // 先返回响应，s-ui 同步在后台异步执行
-    res.json({ success: true, share: updated });
-
-    // 异步同步到各区域 s-ui bridge
+    // 2. 更新已有区域 — 同步入站权限/流量/到期
     for (const [region, oldInfo] of Object.entries(oldBridges)) {
       if (!oldInfo.clientName) continue;
+      const newConfig = newBridges[region];
+
+      // 如果新数据中该区域入站为空 → 删除用户
+      if (newConfig && (newConfig.inboundIds || []).length === 0) {
+        console.log(`[Share] 编辑时移除 ${region} s-ui 用户:`, oldInfo.clientName);
+        try {
+          await suiBridgeRequest(region, 'DELETE', `/api/clients/${encodeURIComponent(oldInfo.clientName)}`);
+          delete finalSuiBridges[region];
+        } catch (e) {
+          console.error(`[Share] ${region} 删除失败:`, e.message);
+        }
+        continue;
+      }
+
+      // 否则更新
       const bridgeBody = {};
-
-      // 标题变更 → 同步重命名
       if (updates.title && updates.title !== oldInfo.clientName) {
-        bridgeBody.newName = updates.title;
+        bridgeBody.newName = safeName;
       }
-
-      // 入站权限变更
-      const newBridges = suiBridgesInput || {};
-      if (newBridges[region]?.inboundIds) {
-        bridgeBody.inboundIds = newBridges[region].inboundIds;
+      if (newConfig?.inboundIds) {
+        bridgeBody.inboundIds = newConfig.inboundIds;
+        finalSuiBridges[region] = { ...oldInfo, inboundIds: newConfig.inboundIds };
       }
-
       if (trafficLimitGB !== undefined) {
         bridgeBody.volume = trafficLimitGB > 0 ? Math.round(trafficLimitGB * 1073741824) : 0;
       }
@@ -296,20 +333,26 @@ router.put('/:id', requireAuth, async (req, res) => {
       }
 
       if (Object.keys(bridgeBody).length > 0) {
-        suiBridgeRequest(region, 'PUT', `/api/clients/${encodeURIComponent(oldInfo.clientName)}`, bridgeBody)
-          .then(() => {
-            if (bridgeBody.newName) {
-              // 更新本地存储的 clientName
-              const currentShare = nodeManager.getShareById(req.params.id);
-              if (currentShare?.suiBridges?.[region]) {
-                currentShare.suiBridges[region].clientName = bridgeBody.newName;
-                nodeManager.updateShare(req.params.id, { suiBridges: currentShare.suiBridges });
-              }
-            }
-          })
-          .catch(e => console.error(`[Share] ${region} s-ui 同步失败: ${e.message}`));
+        try {
+          await suiBridgeRequest(region, 'PUT', `/api/clients/${encodeURIComponent(oldInfo.clientName)}`, bridgeBody);
+          if (bridgeBody.newName) {
+            finalSuiBridges[region] = { ...finalSuiBridges[region], clientName: safeName };
+          }
+        } catch (e) {
+          console.error(`[Share] ${region} s-ui 更新失败:`, e.message);
+        }
       }
     }
+
+    // 保存最终的 suiBridges 状态
+    updates.suiBridges = Object.keys(finalSuiBridges).length > 0 ? finalSuiBridges : undefined;
+
+    const updated = nodeManager.updateShare(req.params.id, updates);
+    if (!updated) {
+      return res.status(404).json({ success: false, error: '分享不存在' });
+    }
+
+    res.json({ success: true, share: updated });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }

@@ -201,13 +201,29 @@ router.post('/', requireAuth, (req, res) => {
         console.log(`[Share] ${region} bridge 返回:`, JSON.stringify(suiResult).substring(0, 200));
 
         if (!suiResult.success) {
-          console.error(`[Share] ${region} s-ui 创建用户失败:`, suiResult.error);
+          // NOTE: 用户可能已存在（同名残留），尝试 PUT 更新
+          console.log(`[Share] ${region} 创建失败 (${suiResult.error})，尝试 PUT 更新...`);
+          try {
+            const putResult = await suiBridgeRequest(region, 'PUT', `/api/clients/${encodeURIComponent(safeName)}`, suiBody);
+            if (putResult.success) {
+              suiBridges[region] = {
+                clientName: safeName, inboundIds,
+                trafficLimitGB: regionTraffic,
+                expireAt: config.expireAt || undefined,
+              };
+              console.log(`[Share] ${region} s-ui 用户 PUT 更新成功:`, safeName);
+            } else {
+              console.error(`[Share] ${region} PUT 也失败:`, putResult.error);
+            }
+          } catch (e2) {
+            console.error(`[Share] ${region} PUT 更新异常:`, e2.message);
+          }
           continue;
         }
 
         suiBridges[region] = {
           clientName: safeName, inboundIds,
-          trafficLimitGB: regionTraffic || undefined,
+          trafficLimitGB: regionTraffic,
           expireAt: config.expireAt || undefined,
         };
         console.log(`[Share] ${region} s-ui 用户创建成功:`, safeName);
@@ -245,7 +261,7 @@ router.post('/', requireAuth, (req, res) => {
  */
 router.put('/:id', requireAuth, async (req, res) => {
   try {
-    const { trafficLimitGB, expireDays, expireAt, suiBridges: suiBridgesInput, nodeOverrides, ...rest } = req.body;
+    const { trafficLimitGB, expireDays, expireAt, suiBridges: suiBridgesInput, nodeOverrides, suiNodeOverrides, ...rest } = req.body;
     const updates = { ...rest };
 
     // NOTE: 后端防线 — 过滤掉前端可能误传的纯数字 s-ui inbound ID
@@ -264,6 +280,9 @@ router.put('/:id', requireAuth, async (req, res) => {
 
     if (nodeOverrides !== undefined) {
       updates.nodeOverrides = nodeOverrides;
+    }
+    if (suiNodeOverrides !== undefined) {
+      updates.suiNodeOverrides = suiNodeOverrides;
     }
 
     const oldShare = nodeManager.getShareById(req.params.id);
@@ -308,12 +327,28 @@ router.put('/:id', requireAuth, async (req, res) => {
         if (result.success) {
           finalSuiBridges[region] = {
             clientName: safeName, inboundIds,
-            trafficLimitGB: regionTraffic || undefined,
+            trafficLimitGB: regionTraffic,
             expireAt: config.expireAt || undefined,
           };
           console.log(`[Share] ${region} s-ui 用户创建成功`);
         } else {
-          console.error(`[Share] ${region} s-ui 创建失败:`, result.error);
+          // NOTE: 用户已存在时改用 PUT 更新，避免区域丢失
+          console.log(`[Share] ${region} 创建失败 (${result.error})，尝试 PUT 更新...`);
+          try {
+            const updateResult = await suiBridgeRequest(region, 'PUT', `/api/clients/${encodeURIComponent(safeName)}`, suiBody);
+            if (updateResult.success) {
+              finalSuiBridges[region] = {
+                clientName: safeName, inboundIds,
+                trafficLimitGB: regionTraffic,
+                expireAt: config.expireAt || undefined,
+              };
+              console.log(`[Share] ${region} s-ui 用户更新成功`);
+            } else {
+              console.error(`[Share] ${region} PUT 更新也失败:`, updateResult.error);
+            }
+          } catch (e2) {
+            console.error(`[Share] ${region} PUT 更新异常:`, e2.message);
+          }
         }
       } catch (e) {
         console.error(`[Share] ${region} bridge 不可用:`, e.message);
@@ -350,7 +385,7 @@ router.put('/:id', requireAuth, async (req, res) => {
       const regionTrafficVal = newConfig?.trafficLimitGB;
       if (regionTrafficVal !== undefined) {
         bridgeBody.volume = regionTrafficVal > 0 ? Math.round(regionTrafficVal * 1073741824) : 0;
-        finalSuiBridges[region] = { ...finalSuiBridges[region], trafficLimitGB: regionTrafficVal || undefined };
+        finalSuiBridges[region] = { ...finalSuiBridges[region], trafficLimitGB: regionTrafficVal };
       } else if (trafficLimitGB !== undefined) {
         bridgeBody.volume = trafficLimitGB > 0 ? Math.round(trafficLimitGB * 1073741824) : 0;
       }
@@ -514,9 +549,10 @@ module.exports.shareSubscribeHandler = async (req, res) => {
     for (const [region, info] of Object.entries(suiBridges)) {
       if (!info.clientName) continue;
 
-      // 获取该区域允许的入站 tag 列表
+      // 获取该区域允许的入站 tag 列表 + tag→id 映射（用于 override）
       let allowedTags = null;
       const allowedIds = new Set(info.inboundIds || []);
+      const tagToId = {};
       if (allowedIds.size > 0) {
         try {
           const inboundData = await suiBridgeRequest(region, 'GET', '/api/inbounds');
@@ -524,6 +560,7 @@ module.exports.shareSubscribeHandler = async (req, res) => {
           for (const ib of (inboundData.inbounds || [])) {
             if (allowedIds.has(ib.id)) {
               allowedTags.add(ib.tag);
+              tagToId[ib.tag] = ib.id;
             }
           }
         } catch {
@@ -533,6 +570,7 @@ module.exports.shareSubscribeHandler = async (req, res) => {
 
       // NOTE: fetchSuiClientLinks 现在返回 {uri, remark} 对
       const linkItems = await fetchSuiClientLinks(region, info.clientName);
+      const suiOverrides = share.suiNodeOverrides || {};
       for (const item of linkItems) {
         try {
           const node = parseURI(item.uri);
@@ -541,6 +579,21 @@ module.exports.shareSubscribeHandler = async (req, res) => {
           // NOTE: 用 remark 精确匹配入站 tag，避免 includes 模糊匹配错漏
           if (allowedTags && allowedTags.size > 0) {
             if (!allowedTags.has(item.remark)) continue;
+          }
+
+          // NOTE: 应用该分享的自建节点覆盖（名称/端口/服务器/SNI）
+          const inboundId = tagToId[item.remark];
+          if (inboundId) {
+            const ov = suiOverrides[`${region}_${inboundId}`];
+            if (ov) {
+              if (ov.name) node.name = ov.name;
+              if (ov.port) node.port = ov.port;
+              if (ov.server) node.server = ov.server;
+              if (ov.sni) {
+                node.sni = ov.sni;
+                if (node.params) node.params.sni = ov.sni;
+              }
+            }
           }
 
           node.id = `sui_${region}_${info.clientName}_${node.name || ''}`;

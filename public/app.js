@@ -857,12 +857,12 @@ function renderSuiInboundSelector(checkedMap, inputName = 'suiInbound', containe
 /**
  * 生成区域独立的 s-ui 配置行 HTML（流量 + 到期）
  * NOTE: 放在编辑/创建模态框的全局配置行下方
- * @param suiBridgesData 已有的区域配置 { jp: { trafficLimitGB, expireAt }, us: { ... } }
+ * @param suiBridgesData 已有的区域配置
+ * @param globalTrafficId 全局流量输入框 ID，用于自动求和
  */
-function buildRegionConfigRows(suiBridgesData = {}) {
+function buildRegionConfigRows(suiBridgesData = {}, globalTrafficId = 'shareTraffic') {
   const regionFlags = { jp: '🇯🇵', hk: '🇭🇰', sg: '🇸🇬', us: '🇺🇸' };
   const regionLabels = { jp: '日本', hk: '香港', sg: '新加坡', us: '美国' };
-  // 从 SUI_INBOUNDS 中提取所有存在的区域
   const regions = [...new Set(SUI_INBOUNDS.map(ib => ib.region))];
   if (regions.length === 0) return '';
 
@@ -870,12 +870,12 @@ function buildRegionConfigRows(suiBridgesData = {}) {
     const flag = regionFlags[region] || '🌍';
     const label = regionLabels[region] || region.toUpperCase();
     const data = suiBridgesData[region] || {};
-    const trafficVal = data.trafficLimitGB || '';
+    // NOTE: trafficLimitGB === 0 表示无限，undefined 表示未设置
+    const trafficVal = (data.trafficLimitGB && data.trafficLimitGB > 0) ? data.trafficLimitGB : '';
     let expireVal = '';
     if (data.expireAt) {
       expireVal = new Date(data.expireAt).toISOString().split('T')[0];
     }
-    // NOTE: 完全复制上方全局配置行的布局结构
     const trafficId = `regionTraffic_${region}`;
     const expireId = `regionExpire_${region}`;
     return `
@@ -887,8 +887,9 @@ function buildRegionConfigRows(suiBridgesData = {}) {
       <div class="form-group">
         <label>📊 ${label}流量 (GB)</label>
         <div class="input-with-btn">
-          <input class="form-input sui-region-traffic" id="${trafficId}" data-region="${region}" type="number" step="1" min="0" value="${trafficVal}" placeholder="不限">
-          <button type="button" class="btn-infinity" title="设为无限" onclick="document.getElementById('${trafficId}').value='';toast('${label}流量已设为无限','success')">♾️</button>
+          <input class="form-input sui-region-traffic" id="${trafficId}" data-region="${region}" type="number" step="1" min="0" value="${trafficVal}" placeholder="不限"
+            oninput="recalcGlobalTraffic('${globalTrafficId}')">
+          <button type="button" class="btn-infinity" title="设为无限" onclick="document.getElementById('${trafficId}').value='';recalcGlobalTraffic('${globalTrafficId}');toast('${label}流量已设为无限','success')">♾️</button>
         </div>
       </div>
       <div class="form-group">
@@ -904,7 +905,7 @@ function buildRegionConfigRows(suiBridgesData = {}) {
 
 /**
  * 根据底部入站勾选状态，动态显示/隐藏区域配置行
- * NOTE: 在入站 checkbox 变化时调用
+ * NOTE: 同时触发全局流量重算
  */
 function updateRegionConfigVisibility() {
   const configs = document.querySelectorAll('.sui-region-config');
@@ -913,6 +914,35 @@ function updateRegionConfigVisibility() {
     const hasChecked = document.querySelector(`input[type=checkbox][data-region="${region}"]:checked`);
     cfg.style.display = hasChecked ? '' : 'none';
   }
+  // NOTE: 尝试更新两个可能的全局流量输入框
+  recalcGlobalTraffic('shareTraffic');
+  recalcGlobalTraffic('editShareTraffic');
+}
+
+/**
+ * 自动计算全局流量 = 各区域流量之和
+ * NOTE: 无区域勾选时默认 100，有区域但全部无限时全局也设为无限
+ */
+function recalcGlobalTraffic(globalId) {
+  const globalInput = document.getElementById(globalId);
+  if (!globalInput) return;
+  const configs = document.querySelectorAll('.sui-region-config');
+  let total = 0;
+  let hasVisible = false;
+  let allUnlimited = true;
+  for (const cfg of configs) {
+    if (cfg.style.display === 'none') continue;
+    hasVisible = true;
+    const input = cfg.querySelector('.sui-region-traffic');
+    const val = parseFloat(input?.value);
+    if (val > 0) { total += val; allUnlimited = false; }
+  }
+  if (!hasVisible) {
+    // 没有勾选任何自建区域，保持用户手动输入或默认 100
+    if (!globalInput.value) globalInput.value = '100';
+    return;
+  }
+  globalInput.value = allUnlimited ? '' : total;
 }
 
 let _shareNodes = [];
@@ -1093,15 +1123,13 @@ function collectSuiBridges(inputName) {
     if (!result[region]) result[region] = { inboundIds: [] };
     result[region].inboundIds.push(parseInt(input.value));
   }
-  // NOTE: 收集每个区域的独立流量设置
+  // NOTE: 收集每个区域的独立流量设置（空 = 0 = 无限）
   const trafficInputs = document.querySelectorAll('.sui-region-traffic');
   for (const input of trafficInputs) {
     const region = input.dataset.region;
     if (!region || !result[region]) continue;
     const val = parseFloat(input.value);
-    if (val > 0) {
-      result[region].trafficLimitGB = val;
-    }
+    result[region].trafficLimitGB = (val > 0) ? val : 0;
   }
   // NOTE: 收集每个区域的独立到期日期
   const expireInputs = document.querySelectorAll('.sui-region-expire');
@@ -1162,9 +1190,10 @@ let _editShareFilter = { sub: 'all', search: '' };
 /**
  * 打开编辑分享弹窗（带筛选搜索）
  */
-// NOTE: 当前编辑中的分享 ID 和 nodeOverrides 缓存
+// NOTE: 当前编辑中的分享 ID 和 overrides 缓存
 let _currentEditShareId = '';
 let _currentNodeOverrides = {};
+let _currentSuiOverrides = {};
 
 async function openEditShare(shareId) {
   try {
@@ -1183,6 +1212,7 @@ async function openEditShare(shareId) {
 
     _currentEditShareId = shareId;
     _currentNodeOverrides = share.nodeOverrides ? JSON.parse(JSON.stringify(share.nodeOverrides)) : {};
+    _currentSuiOverrides = share.suiNodeOverrides ? JSON.parse(JSON.stringify(share.suiNodeOverrides)) : {};
 
     const currentIds = new Set(share.nodeIds || []);
     const trafficGB = share.trafficLimit > 0 ? (share.trafficLimit / 1073741824).toFixed(1) : '';
@@ -1220,13 +1250,17 @@ async function openEditShare(shareId) {
         }).join('')}
         ${selectedSui.map(ib => {
           const regionFlags2 = { jp: '🇯🇵', us: '🇺🇸', hk: '🇭🇰', sg: '🇸🇬' };
+          const ovKey = `${ib.region}_${ib.id}`;
+          const suiOv = (_currentSuiOverrides || {})[ovKey];
+          const suiName = suiOv?.name || ib.name;
           return `
           <div class="selected-node-row">
             <span>${regionFlags2[ib.region]||'🌍'}</span>
-            <span class="node-name">${esc(ib.name)}（自建）</span>
+            <span class="node-name">${esc(suiName)}（自建）${suiOv ? ' <span style="color:var(--accent);font-size:0.7rem;">已定制</span>' : ''}</span>
             <span class="type-badge ${ib.type==='hysteria2'?'hy2':ib.type}" style="font-size:0.7rem;">${ib.type}</span>
             <div class="node-actions">
-              <button class="btn btn-secondary" disabled>⚡ 测速</button>
+              <button class="btn btn-secondary" onclick="testShareNode('sui_${ib.region}_${ib.id}')">⚡ 测速</button>
+              <button class="btn btn-secondary" onclick="editSuiNodeOverride('${ib.region}',${ib.id},'${shareId}')">✏️ 编辑</button>
             </div>
           </div>`;
         }).join('')}
@@ -1263,7 +1297,7 @@ async function openEditShare(shareId) {
               </div>
             </div>
           </div>
-          ${buildRegionConfigRows(suiBridgesData)}
+          ${buildRegionConfigRows(suiBridgesData, 'editShareTraffic')}
           ${selectedHtml}
           <div id="editShareNodeList" class="share-node-list"></div>
         </div>
@@ -1420,6 +1454,81 @@ function clearNodeOverride(nodeId) {
 }
 
 /**
+ * 编辑自建节点覆盖（名称/端口/服务器）
+ * NOTE: 仅在本条订阅链接有效，不影响其他分享
+ */
+function editSuiNodeOverride(region, inboundId, shareId) {
+  const ovKey = `${region}_${inboundId}`;
+  const ov = _currentSuiOverrides[ovKey] || {};
+  const ib = SUI_INBOUNDS.find(i => i.id === inboundId && i.region === region);
+  const origName = ib ? ib.name : `inbound-${inboundId}`;
+  const regionLabels = { jp: '日本', us: '美国', hk: '香港', sg: '新加坡' };
+  const regionLabel = regionLabels[region] || region;
+
+  let modal = document.getElementById('suiOverrideModal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'suiOverrideModal';
+    modal.className = 'modal-overlay';
+    document.body.appendChild(modal);
+  }
+  modal.innerHTML = `
+    <div class="modal" style="max-width:480px;">
+      <div class="modal-header"><h3>编辑自建节点 - ${regionLabel}</h3><button class="modal-close" onclick="closeModal('suiOverrideModal')">✕</button></div>
+      <div class="modal-body">
+        <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:12px;">修改仅对本条分享链接生效，不影响其他订阅</p>
+        <div class="node-edit-form">
+          <div class="form-group">
+            <label>节点名称</label>
+            <input class="form-input" id="suiOvName" value="${esc(ov.name || origName)}" placeholder="${esc(origName)}">
+          </div>
+          <div class="form-group">
+            <label>端口</label>
+            <input class="form-input" id="suiOvPort" type="number" value="${ov.port || ''}" placeholder="留空=默认">
+          </div>
+          <div class="form-group">
+            <label>服务器地址</label>
+            <input class="form-input" id="suiOvServer" value="${esc(ov.server || '')}" placeholder="留空=默认">
+          </div>
+          <div class="form-group">
+            <label>SNI</label>
+            <input class="form-input" id="suiOvSni" value="${esc(ov.sni || '')}" placeholder="留空=默认">
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-danger" onclick="clearSuiOverride('${ovKey}')">🔄 恢复默认</button>
+        <button class="btn btn-secondary" onclick="closeModal('suiOverrideModal')">取消</button>
+        <button class="btn btn-primary" onclick="saveSuiOverride('${ovKey}')">💾 保存</button>
+      </div>
+    </div>`;
+  modal.classList.add('active');
+}
+
+function saveSuiOverride(ovKey) {
+  const override = {};
+  const name = document.getElementById('suiOvName').value.trim();
+  const port = document.getElementById('suiOvPort').value.trim();
+  const server = document.getElementById('suiOvServer').value.trim();
+  const sni = document.getElementById('suiOvSni').value.trim();
+  if (name) override.name = name;
+  if (port) override.port = parseInt(port);
+  if (server) override.server = server;
+  if (sni) override.sni = sni;
+  if (Object.keys(override).length > 0) {
+    _currentSuiOverrides[ovKey] = override;
+    toast('自建节点已定制（保存分享后生效）', 'success');
+  }
+  closeModal('suiOverrideModal');
+}
+
+function clearSuiOverride(ovKey) {
+  delete _currentSuiOverrides[ovKey];
+  toast('已恢复默认配置', 'success');
+  closeModal('suiOverrideModal');
+}
+
+/**
  * 提交编辑分享（标题/流量/到期 + 节点 + s-ui + nodeOverrides）
  */
 async function submitEditShare(shareId) {
@@ -1446,6 +1555,7 @@ async function submitEditShare(shareId) {
         trafficLimitGB,
         expireAt: expireDate ? new Date(expireDate + 'T23:59:59').toISOString() : null,
         nodeOverrides: Object.keys(_currentNodeOverrides).length > 0 ? _currentNodeOverrides : undefined,
+        suiNodeOverrides: Object.keys(_currentSuiOverrides).length > 0 ? _currentSuiOverrides : undefined,
       })
     });
     toast('分享已更新', 'success');

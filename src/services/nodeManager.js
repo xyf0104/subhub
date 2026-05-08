@@ -206,6 +206,10 @@ function createShare(shareData) {
     suiClientName: shareData.suiClientName || null,
     // s-ui 入站 ID 列表（控制订阅输出哪些协议）
     suiInboundIds: shareData.suiInboundIds || undefined,
+    // NOTE: 多区域 s-ui 桥接数据 { jp: { clientName, inboundIds, ... }, us: { ... } }
+    suiBridges: shareData.suiBridges || undefined,
+    // NOTE: 自建节点覆盖 { "region_inboundId": { name, port, server, sni } }
+    suiNodeOverrides: shareData.suiNodeOverrides || undefined,
   };
   shares.push(share);
   saveShares(shares);

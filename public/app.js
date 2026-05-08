@@ -780,22 +780,37 @@ function formatBytes(b) {
 }
 
 /**
- * s-ui 入站协议映射（ID → 名称）
+ * s-ui 入站列表（动态从 bridge 获取，不再硬编码）
  */
-const SUI_INBOUNDS = [
-  { id: 1, name: 'Hysteria2-日本', type: 'hysteria2' },
-  { id: 2, name: 'TUIC', type: 'tuic' },
-  { id: 3, name: 'Vless-Reality', type: 'vless' },
-  { id: 4, name: 'Trojan', type: 'trojan' },
-];
+let SUI_INBOUNDS = [];
+
+/**
+ * 从后端动态获取 s-ui 入站列表
+ * NOTE: 每次打开分享弹窗时调用，确保与 s-ui 后台同步
+ */
+async function loadSuiInbounds() {
+  try {
+    const data = await api('/sui-inbounds');
+    if (data.success && data.inbounds.length > 0) {
+      SUI_INBOUNDS = data.inbounds.map(ib => ({
+        id: ib.id, name: ib.tag || `inbound-${ib.id}`, type: ib.type, region: ib.region || 'jp',
+      }));
+    }
+  } catch (e) {
+    console.error('获取 s-ui 入站失败:', e.message);
+  }
+}
 
 /**
  * 生成 s-ui 入站选择区域 HTML
  * @param checkedIds 已勾选的入站 ID 数组，null 表示全不选
  */
 function renderSuiInboundSelector(checkedIds, inputName = 'suiInbound', containerId = '') {
+  if (SUI_INBOUNDS.length === 0) {
+    return '<div style="margin-top:12px;padding:12px;background:var(--bg-input);border-radius:8px;color:var(--text-muted);font-size:0.85rem;">⚠️ 无法获取日本服务器入站列表（bridge 不可用）</div>';
+  }
+  const regionFlags = { jp: '🇯🇵', hk: '🇭🇰', sg: '🇸🇬', us: '🇺🇸' };
   const checked = new Set(checkedIds || []);
-  // NOTE: containerId 用于 onchange 回调刷新计数
   const changeHandler = containerId ? ` onchange="onShareCheckChange('${containerId}')"` : '';
   return `
     <div style="margin-top:12px;padding:12px;background:var(--bg-input);border-radius:8px;border:1px solid var(--border-color);">
@@ -803,14 +818,16 @@ function renderSuiInboundSelector(checkedIds, inputName = 'suiInbound', containe
       <p style="font-size:0.8rem;color:var(--text-muted);margin:0 0 8px;">
         仅勾选你想分享的协议，s-ui 用户只会拥有对应入站权限
       </p>
-      ${SUI_INBOUNDS.map(ib => `
+      ${SUI_INBOUNDS.map(ib => {
+        const flag = regionFlags[ib.region] || '🌍';
+        return `
         <label class="share-node-item sui-inbound-item">
           <input type="checkbox" name="${inputName}" value="${ib.id}" ${checked.has(ib.id) ? 'checked' : ''}${changeHandler}>
-          <span>🇯🇵</span>
-          <span>${ib.name}</span>
+          <span>${flag}</span>
+          <span>${esc(ib.name)}</span>
           <span class="type-badge ${ib.type==='hysteria2'?'hy2':ib.type}" style="font-size:0.72rem;">${ib.type}</span>
-        </label>
-      `).join('')}
+        </label>`;
+      }).join('')}
     </div>`;
 }
 
@@ -819,7 +836,8 @@ let _shareFilter = { sub: 'all', search: '' };
 
 async function openCreateShare() {
   try {
-    const [nodesData, subsData] = await Promise.all([api('/nodes'), api('/subscriptions')]);
+    // NOTE: 并行加载节点、订阅源、s-ui 入站
+    const [nodesData, subsData] = await Promise.all([api('/nodes'), api('/subscriptions'), loadSuiInbounds()]);
     _shareNodes = nodesData.nodes.filter(n => n.enabled !== false);
     _allSubs = subsData.subscriptions || [];
 
@@ -1028,7 +1046,8 @@ let _currentNodeOverrides = {};
 
 async function openEditShare(shareId) {
   try {
-    const sharesData = await api('/shares');
+    // NOTE: 每次编辑都重新加载 s-ui 入站，确保同步
+    const [sharesData] = await Promise.all([api('/shares'), loadSuiInbounds()]);
     if (!_editShareNodes.length) {
       const nodesData = await api('/nodes');
       _editShareNodes = nodesData.nodes;

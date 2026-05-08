@@ -315,42 +315,142 @@ router.get('/stats', requireAuth, (req, res) => {
 
 /**
  * 流量监控 API
- * 通过 s-ui 桥接服务获取用户流量和系统网卡数据
+ * 从多台 s-ui 桥接服务获取用户流量和系统网卡数据
+ * NOTE: 支持多 bridge 架构，聚合所有服务器的数据
  */
 router.get('/traffic', requireAuth, async (req, res) => {
   try {
     const http = require('http');
     const SUI_BRIDGE_TOKEN = process.env.SUI_BRIDGE_TOKEN || 'subhub_bridge_change_me';
 
-    const data = await new Promise((resolve, reject) => {
-      const opts = {
-        hostname: '103.200.97.23',
-        port: 9876,
-        path: '/api/traffic',
-        method: 'GET',
-        headers: { 'X-Token': SUI_BRIDGE_TOKEN },
-        timeout: 8000,
-      };
-      const r = http.request(opts, (resp) => {
-        let body = '';
-        resp.on('data', c => body += c);
-        resp.on('end', () => {
-          try { resolve(JSON.parse(body)); }
-          catch { resolve({ success: false, error: body }); }
-        });
-      });
-      r.on('error', e => reject(e));
-      r.on('timeout', () => { r.destroy(); reject(new Error('超时')); });
-      r.end();
-    });
+    // 解析多 bridge 配置（与 share.js 保持一致）
+    let bridges = [];
+    if (process.env.SUI_BRIDGES) {
+      try { bridges = JSON.parse(process.env.SUI_BRIDGES); } catch {}
+    }
+    if (bridges.length === 0) {
+      bridges = [{ region: 'jp', hostname: '103.200.97.23', port: 9876, token: SUI_BRIDGE_TOKEN }];
+    }
 
-    res.json(data);
+    /**
+     * 请求单个 bridge 的流量数据
+     */
+    function fetchTraffic(bridge) {
+      return new Promise((resolve) => {
+        const opts = {
+          hostname: bridge.hostname,
+          port: bridge.port || 9876,
+          path: '/api/traffic',
+          method: 'GET',
+          headers: { 'X-Token': bridge.token || SUI_BRIDGE_TOKEN },
+          timeout: 8000,
+        };
+        const r = http.request(opts, (resp) => {
+          let body = '';
+          resp.on('data', c => body += c);
+          resp.on('end', () => {
+            try { resolve({ region: bridge.region, ...JSON.parse(body) }); }
+            catch { resolve({ region: bridge.region, success: false, users: [] }); }
+          });
+        });
+        r.on('error', () => resolve({ region: bridge.region, success: false, users: [] }));
+        r.on('timeout', () => { r.destroy(); resolve({ region: bridge.region, success: false, users: [] }); });
+        r.end();
+      });
+    }
+
+    // 并行请求所有 bridge
+    const results = await Promise.all(bridges.map(fetchTraffic));
+
+    // 聚合返回：合并所有用户，系统数据按 region 分组
+    const allUsers = [];
+    const systems = {};
+    let overallSuccess = false;
+    for (const result of results) {
+      if (result.success) overallSuccess = true;
+      // 用户数据添加 region 标识
+      for (const user of (result.users || [])) {
+        allUsers.push({ ...user, region: result.region });
+      }
+      if (result.system) {
+        systems[result.region] = result.system;
+      }
+    }
+
+    res.json({
+      success: overallSuccess,
+      users: allUsers,
+      system: systems[bridges[0]?.region] || { rx: 0, tx: 0, uptimeSeconds: 0 },
+      systems,
+    });
   } catch (error) {
     res.json({
       success: false,
       error: `桥接不可用: ${error.message}`,
       users: [], system: { rx: 0, tx: 0, uptimeSeconds: 0 }
     });
+  }
+});
+
+/**
+ * 获取 s-ui 入站列表（动态）
+ * NOTE: 从 bridge 实时获取，确保与 s-ui 后台保持同步
+ */
+router.get('/sui-inbounds', requireAuth, async (req, res) => {
+  try {
+    const http = require('http');
+    const SUI_BRIDGE_TOKEN = process.env.SUI_BRIDGE_TOKEN || 'subhub_bridge_change_me';
+
+    let bridges = [];
+    if (process.env.SUI_BRIDGES) {
+      try { bridges = JSON.parse(process.env.SUI_BRIDGES); } catch {}
+    }
+    if (bridges.length === 0) {
+      bridges = [{ region: 'jp', hostname: '103.200.97.23', port: 9876, token: SUI_BRIDGE_TOKEN }];
+    }
+
+    function fetchInbounds(bridge) {
+      return new Promise((resolve) => {
+        const opts = {
+          hostname: bridge.hostname,
+          port: bridge.port || 9876,
+          path: '/api/inbounds',
+          method: 'GET',
+          headers: { 'X-Token': bridge.token || SUI_BRIDGE_TOKEN },
+          timeout: 8000,
+        };
+        const r = http.request(opts, (resp) => {
+          let body = '';
+          resp.on('data', c => body += c);
+          resp.on('end', () => {
+            try {
+              const data = JSON.parse(body);
+              const inbounds = (data.inbounds || []).map(ib => ({
+                ...ib, region: bridge.region,
+              }));
+              resolve({ region: bridge.region, success: true, inbounds });
+            } catch {
+              resolve({ region: bridge.region, success: false, inbounds: [] });
+            }
+          });
+        });
+        r.on('error', () => resolve({ region: bridge.region, success: false, inbounds: [] }));
+        r.on('timeout', () => { r.destroy(); resolve({ region: bridge.region, success: false, inbounds: [] }); });
+        r.end();
+      });
+    }
+
+    const results = await Promise.all(bridges.map(fetchInbounds));
+    const allInbounds = [];
+    let overallSuccess = false;
+    for (const result of results) {
+      if (result.success) overallSuccess = true;
+      allInbounds.push(...result.inbounds);
+    }
+
+    res.json({ success: overallSuccess, inbounds: allInbounds });
+  } catch (error) {
+    res.json({ success: false, error: error.message, inbounds: [] });
   }
 });
 

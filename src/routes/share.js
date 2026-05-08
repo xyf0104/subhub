@@ -363,21 +363,40 @@ module.exports.shareSubscribeHandler = async (req, res) => {
       });
 
     // 2. s-ui 用户节点（动态拉取，按 suiInboundIds 过滤）
-    // NOTE: inbound ID 与协议的映射: 1=hysteria2, 2=tuic, 3=vless, 4=trojan
-    const INBOUND_ID_TO_TYPE = { 1: 'hysteria2', 2: 'tuic', 3: 'vless', 4: 'trojan' };
+    // NOTE: 从 bridge 获取实际入站列表，用 tag 匹配 links 的 remark 来过滤
     let suiNodes = [];
     if (share.suiClientName) {
-      const allowedTypes = new Set(
-        (share.suiInboundIds || [1,2,3,4]).map(id => INBOUND_ID_TO_TYPE[id]).filter(Boolean)
-      );
+      // 获取允许的入站 tag 列表
+      let allowedTags = new Set();
+      const allowedIds = new Set(share.suiInboundIds || []);
+      if (allowedIds.size > 0) {
+        try {
+          const inboundData = await suiBridgeRequest('GET', '/api/inbounds');
+          for (const ib of (inboundData.inbounds || [])) {
+            if (allowedIds.has(ib.id)) {
+              allowedTags.add(ib.tag);
+            }
+          }
+        } catch {
+          // bridge 不可用时放行所有节点
+          allowedTags = null;
+        }
+      }
+
       const uris = await fetchSuiClientLinks(share.suiClientName);
       for (const uri of uris) {
         try {
           const node = parseURI(uri);
-          if (node && allowedTypes.has(node.type)) {
-            node.id = `sui_${share.suiClientName}_${node.name || ''}`;
-            suiNodes.push(node);
+          if (!node) continue;
+
+          // NOTE: 如果有入站过滤，通过节点名称（remark）匹配入站 tag
+          if (allowedTags && allowedTags.size > 0) {
+            const nameMatch = [...allowedTags].some(tag => node.name && node.name.includes(tag));
+            if (!nameMatch) continue;
           }
+
+          node.id = `sui_${share.suiClientName}_${node.name || ''}`;
+          suiNodes.push(node);
         } catch { /* 跳过解析失败的 */ }
       }
     }

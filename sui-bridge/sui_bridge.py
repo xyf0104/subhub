@@ -21,8 +21,16 @@ API_TOKEN = os.environ.get("BRIDGE_TOKEN", "subhub_bridge_change_me")
 LISTEN_PORT = int(os.environ.get("BRIDGE_PORT", "9876"))
 SUI_DOMAIN = os.environ.get("SUI_DOMAIN", "your-sui-domain.com")
 
-# 所有 inbound ID（Hy2=1, TUIC=2, Vless=3, Trojan=4）
-ALL_INBOUND_IDS = [1, 2, 3, 4]
+# NOTE: 不再硬编码，动态从数据库获取
+def get_all_inbound_ids():
+    """从数据库获取所有入站 ID"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute("SELECT id FROM inbounds").fetchall()
+        conn.close()
+        return [r[0] for r in rows]
+    except Exception:
+        return []
 
 
 def gen_password(length=10):
@@ -61,30 +69,78 @@ def build_client_config(name, password, uid):
 
 
 def get_client_links(name, password, uid):
-    """根据 inbound 配置生成节点 URI"""
+    """
+    根据数据库中的实际入站配置动态生成节点 URI
+    NOTE: 不再硬编码，自动适配 s-ui 后台的入站增删改
+    """
     domain = SUI_DOMAIN
-    links = [
-        {
-            "remark": "Hysteria2-日本",
-            "type": "local",
-            "uri": f"hysteria2://{password}@{domain}:443?downmbps=50&upmbps=500&security=tls&insecure=1&sni=www.bing.com&fastopen=0#Hysteria2-%E6%97%A5%E6%9C%AC"
-        },
-        {
-            "remark": "TUIC",
-            "type": "local",
-            "uri": f"tuic://{uid}:{password}@{domain}:41848?security=tls&insecure=1&sni=www.bing.com&alpn=h3,h2,http/1.1&congestion_control=bbr#TUIC"
-        },
-        {
-            "remark": "Vless-Reality",
-            "type": "local",
-            "uri": f"vless://{uid}@{domain}:443?type=tcp&security=reality&pbk=j72jwI0MLT49n4JYHSI-X6HaK0mbxD52EoVqOJIunX8&sid=c3&fp=chrome&sni=www.bing.com&flow=xtls-rprx-vision#Vless-Reality"
-        },
-        {
-            "remark": "trojan",
-            "type": "local",
-            "uri": f"trojan://{password}@{domain}:56946?type=ws&path=%2Fabc&host=www.bing.com&security=tls&allowInsecure=1&sni=www.bing.com&alpn=h3,h2,http/1.1#trojan"
-        },
-    ]
+    links = []
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute("SELECT id, type, tag, out_json, options FROM inbounds").fetchall()
+        conn.close()
+
+        for row in rows:
+            ib_id, ib_type, ib_tag = row[0], row[1], row[2]
+            out_json = json.loads(row[3]) if row[3] else {}
+            options = json.loads(row[4]) if row[4] else {}
+            port = out_json.get("server_port", options.get("listen_port", 443))
+            tls_cfg = out_json.get("tls", {})
+            sni = tls_cfg.get("server_name", "www.bing.com")
+            insecure = "1" if tls_cfg.get("insecure", False) else "0"
+
+            if ib_type == "hysteria2":
+                down = out_json.get("down_mbps", 50)
+                up = options.get("up_mbps", 500)
+                uri = (f"hysteria2://{password}@{domain}:{port}"
+                       f"?downmbps={down}&upmbps={up}&security=tls"
+                       f"&insecure={insecure}&sni={sni}&fastopen=0"
+                       f"#{ib_tag}")
+                links.append({"remark": ib_tag, "type": "local", "uri": uri})
+
+            elif ib_type == "vless":
+                reality = tls_cfg.get("reality", {})
+                if reality.get("enabled"):
+                    pbk = reality.get("public_key", "")
+                    sid = reality.get("short_id", "")
+                    fp = tls_cfg.get("utls", {}).get("fingerprint", "chrome")
+                    uri = (f"vless://{uid}@{domain}:{port}"
+                           f"?type=tcp&security=reality&pbk={pbk}&sid={sid}"
+                           f"&fp={fp}&sni={sni}&flow=xtls-rprx-vision"
+                           f"#{ib_tag}")
+                else:
+                    uri = (f"vless://{uid}@{domain}:{port}"
+                           f"?type=tcp&security=tls&sni={sni}"
+                           f"&flow=xtls-rprx-vision"
+                           f"#{ib_tag}")
+                links.append({"remark": ib_tag, "type": "local", "uri": uri})
+
+            elif ib_type == "trojan":
+                transport = options.get("transport", {})
+                t_type = transport.get("type", "tcp")
+                if t_type == "ws":
+                    path = transport.get("path", "/")
+                    host = transport.get("headers", {}).get("host", sni)
+                    uri = (f"trojan://{password}@{domain}:{port}"
+                           f"?type=ws&path={path}&host={host}"
+                           f"&security=tls&allowInsecure={insecure}&sni={sni}"
+                           f"#{ib_tag}")
+                else:
+                    uri = (f"trojan://{password}@{domain}:{port}"
+                           f"?security=tls&allowInsecure={insecure}&sni={sni}"
+                           f"#{ib_tag}")
+                links.append({"remark": ib_tag, "type": "local", "uri": uri})
+
+            elif ib_type == "tuic":
+                uri = (f"tuic://{uid}:{password}@{domain}:{port}"
+                       f"?security=tls&insecure={insecure}&sni={sni}"
+                       f"&alpn=h3,h2,http/1.1&congestion_control=bbr"
+                       f"#{ib_tag}")
+                links.append({"remark": ib_tag, "type": "local", "uri": uri})
+
+    except Exception as e:
+        print(f"[Bridge] get_client_links error: {e}")
+
     return links
 
 
@@ -201,7 +257,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 self.send_json(400, {"error": "name required"})
                 return
 
-            inbound_ids = data.get("inboundIds", ALL_INBOUND_IDS)
+            inbound_ids = data.get("inboundIds", get_all_inbound_ids())
             volume = data.get("volume", 0)  # 流量限制（字节）
             expiry = data.get("expiry", 0)  # 过期时间戳
 
@@ -336,7 +392,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
             # 通知 s-ui 重载
             notify_sui_change(conn, "delete", {
                 "enable": True, "name": name, "config": config,
-                "inbounds": ALL_INBOUND_IDS, "links": [],
+                "inbounds": get_all_inbound_ids(), "links": [],
                 "volume": 0, "expiry": 0, "up": 0, "down": 0,
                 "desc": "", "group": "", "id": client_id,
             })

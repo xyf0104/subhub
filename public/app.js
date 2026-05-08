@@ -802,33 +802,52 @@ async function loadSuiInbounds() {
 }
 
 /**
- * 生成 s-ui 入站选择区域 HTML
- * @param checkedIds 已勾选的入站 ID 数组，null 表示全不选
+ * 生成 s-ui 入站选择区域 HTML（按 region 分组显示）
+ * @param checkedMap 已勾选的入站，格式: { jp: [3,5], us: [2] } 或旧版 [id,...]
  */
-function renderSuiInboundSelector(checkedIds, inputName = 'suiInbound', containerId = '') {
+function renderSuiInboundSelector(checkedMap, inputName = 'suiInbound', containerId = '') {
   if (SUI_INBOUNDS.length === 0) {
-    return '<div style="margin-top:12px;padding:12px;background:var(--bg-input);border-radius:8px;color:var(--text-muted);font-size:0.85rem;">⚠️ 无法获取日本服务器入站列表（bridge 不可用）</div>';
+    return '<div style="margin-top:12px;padding:12px;background:var(--bg-input);border-radius:8px;color:var(--text-muted);font-size:0.85rem;">⚠️ 无法获取自建节点入站列表（bridge 不可用）</div>';
   }
   const regionFlags = { jp: '🇯🇵', hk: '🇭🇰', sg: '🇸🇬', us: '🇺🇸' };
-  const checked = new Set(checkedIds || []);
+  const regionLabels = { jp: '日本', hk: '香港', sg: '新加坡', us: '美国' };
+  // NOTE: 兼容旧版数据（纯数组 → 视为 jp 区域）
+  let checked = {};
+  if (Array.isArray(checkedMap)) {
+    checked = { jp: new Set(checkedMap) };
+  } else if (checkedMap && typeof checkedMap === 'object') {
+    for (const [r, ids] of Object.entries(checkedMap)) {
+      checked[r] = new Set(ids || []);
+    }
+  }
   const changeHandler = containerId ? ` onchange="onShareCheckChange('${containerId}')"` : '';
-  return `
+
+  // 按 region 分组
+  const groups = {};
+  for (const ib of SUI_INBOUNDS) {
+    if (!groups[ib.region]) groups[ib.region] = [];
+    groups[ib.region].push(ib);
+  }
+
+  return Object.entries(groups).map(([region, inbounds]) => {
+    const flag = regionFlags[region] || '🌍';
+    const label = regionLabels[region] || region.toUpperCase();
+    const checkedSet = checked[region] || new Set();
+    return `
     <div style="margin-top:12px;padding:12px;background:var(--bg-input);border-radius:8px;border:1px solid var(--border-color);">
-      <div style="font-weight:600;margin-bottom:8px;">🇯🇵 日本服务器入站（勾选后自动创建独立用户）</div>
+      <div style="font-weight:600;margin-bottom:8px;">${flag} ${label}服务器入站（勾选后自动创建独立用户）</div>
       <p style="font-size:0.8rem;color:var(--text-muted);margin:0 0 8px;">
         仅勾选你想分享的协议，s-ui 用户只会拥有对应入站权限
       </p>
-      ${SUI_INBOUNDS.map(ib => {
-        const flag = regionFlags[ib.region] || '🌍';
-        return `
-        <label class="share-node-item sui-inbound-item">
-          <input type="checkbox" name="${inputName}" value="${ib.id}" ${checked.has(ib.id) ? 'checked' : ''}${changeHandler}>
+      ${inbounds.map(ib => `
+        <label class="share-node-item sui-inbound-item" data-region="${region}">
+          <input type="checkbox" name="${inputName}" value="${ib.id}" data-region="${region}" ${checkedSet.has(ib.id) ? 'checked' : ''}${changeHandler}>
           <span>${flag}</span>
           <span>${esc(ib.name)}</span>
           <span class="type-badge ${ib.type==='hysteria2'?'hy2':ib.type}" style="font-size:0.72rem;">${ib.type}</span>
-        </label>`;
-      }).join('')}
+        </label>`).join('')}
     </div>`;
+  }).join('');
 }
 
 let _shareNodes = [];
@@ -968,11 +987,11 @@ function getShareCheckedIds(containerId) {
 async function submitShare() {
   const title = document.getElementById('shareTitle').value.trim();
   if (!title) return toast('请填写标题', 'error');
-  // NOTE: 从 DOM 读取所有勾选节点（所有节点始终在 DOM 中，不会丢失）
   const nodeIds = getShareCheckedIds('shareNodeList');
-  const suiInboundIds = [...document.querySelectorAll('input[name=suiInbound]:checked')].map(i => parseInt(i.value));
-  const suiEnabled = suiInboundIds.length > 0;
-  if (nodeIds.length === 0 && !suiEnabled) return toast('请至少选择一个节点或日本入站', 'error');
+  // NOTE: 按 region 分组收集勾选的入站 ID
+  const suiBridges = collectSuiBridges('suiInbound');
+  const hasSui = Object.keys(suiBridges).length > 0;
+  if (nodeIds.length === 0 && !hasSui) return toast('请至少选择一个节点或自建入站', 'error');
   const trafficLimitGB = parseFloat(document.getElementById('shareTraffic').value) || 0;
   const expireDays = parseInt(document.getElementById('shareExpireDays').value) || 0;
 
@@ -982,8 +1001,7 @@ async function submitShare() {
       body: JSON.stringify({
         title, nodeIds, trafficLimitGB,
         expireDays: expireDays || null,
-        suiEnabled,
-        suiInboundIds: suiEnabled ? suiInboundIds : undefined,
+        suiBridges: hasSui ? suiBridges : undefined,
       })
     });
     toast(`分享「${share.title}」创建成功`, 'success');
@@ -991,6 +1009,22 @@ async function submitShare() {
     loadShares();
     setTimeout(() => showShareLinks(share.token, share.title), 300);
   } catch (e) { toast(e.message, 'error'); }
+}
+
+/**
+ * 按 region 分组收集勾选的入站 ID
+ * @returns { jp: { inboundIds: [3,5] }, us: { inboundIds: [2] } }
+ */
+function collectSuiBridges(inputName) {
+  const result = {};
+  const checkedInputs = [...document.querySelectorAll(`input[name=${inputName}]:checked`)];
+  for (const input of checkedInputs) {
+    const region = input.dataset.region;
+    if (!region) continue;
+    if (!result[region]) result[region] = { inboundIds: [] };
+    result[region].inboundIds.push(parseInt(input.value));
+  }
+  return result;
 }
 
 function showShareLinks(token, title) {
@@ -1068,7 +1102,16 @@ async function openEditShare(shareId) {
 
     const flags = {JP:'🇯🇵',HK:'🇭🇰',SG:'🇸🇬',US:'🇺🇸',TW:'🇹🇼',KR:'🇰🇷',UK:'🇬🇧',DE:'🇩🇪',FR:'🇫🇷',CA:'🇨🇦',AU:'🇦🇺'};
     const selectedNodes = _editShareNodes.filter(n => currentIds.has(n.id));
-    const selectedSui = SUI_INBOUNDS.filter(ib => (share.suiInboundIds || []).includes(ib.id));
+    // NOTE: 兼容新旧数据结构 — 旧版 suiInboundIds 视为 jp 区域
+    const suiBridgesData = share.suiBridges || (share.suiClientName ? { jp: { clientName: share.suiClientName, inboundIds: share.suiInboundIds || [] } } : {});
+    const allSuiCheckedIds = [];
+    for (const info of Object.values(suiBridgesData)) {
+      allSuiCheckedIds.push(...(info.inboundIds || []));
+    }
+    const selectedSui = SUI_INBOUNDS.filter(ib => {
+      const regionInfo = suiBridgesData[ib.region];
+      return regionInfo && (regionInfo.inboundIds || []).includes(ib.id);
+    });
 
     const selectedHtml = (selectedNodes.length + selectedSui.length) > 0 ? `
       <div class="selected-nodes-section">
@@ -1087,15 +1130,18 @@ async function openEditShare(shareId) {
             </div>
           </div>`;
         }).join('')}
-        ${selectedSui.map(ib => `
+        ${selectedSui.map(ib => {
+          const regionFlags2 = { jp: '🇯🇵', us: '🇺🇸', hk: '🇭🇰', sg: '🇸🇬' };
+          return `
           <div class="selected-node-row">
-            <span>🇯🇵</span>
-            <span class="node-name">${ib.name}（自建）</span>
+            <span>${regionFlags2[ib.region]||'🌍'}</span>
+            <span class="node-name">${esc(ib.name)}（自建）</span>
             <span class="type-badge ${ib.type==='hysteria2'?'hy2':ib.type}" style="font-size:0.7rem;">${ib.type}</span>
             <div class="node-actions">
               <button class="btn btn-secondary" disabled>⚡ 测速</button>
             </div>
-          </div>`).join('')}
+          </div>`;
+        }).join('')}
       </div>` : '';
 
     let modal = document.getElementById('editShareModal');
@@ -1138,7 +1184,12 @@ async function openEditShare(shareId) {
         </div>
       </div>`;
 
-    buildShareNodeSelector('editShareNodeList', 'editShareNode', _editShareNodes, currentIds, share.suiInboundIds || []);
+    // NOTE: 编辑时回显已勾选的入站，构造多区域勾选 Map
+    const suiCheckedMap = {};
+    for (const [region, info] of Object.entries(suiBridgesData)) {
+      suiCheckedMap[region] = info.inboundIds || [];
+    }
+    buildShareNodeSelector('editShareNodeList', 'editShareNode', _editShareNodes, currentIds, suiCheckedMap);
     modal.classList.add('active');
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -1281,15 +1332,16 @@ function clearNodeOverride(nodeId) {
  */
 async function submitEditShare(shareId) {
   const nodeIds = getShareCheckedIds('editShareNodeList');
-  const suiInboundIds = [...document.querySelectorAll('input[name=editSuiInbound]:checked')].map(i => parseInt(i.value));
+  // NOTE: 按 region 分组收集勾选的入站
+  const suiBridges = collectSuiBridges('editSuiInbound');
   const title = document.getElementById('editShareTitle').value.trim();
   const trafficVal = document.getElementById('editShareTraffic').value;
   const expireDate = document.getElementById('editShareExpire').value;
 
-  if (nodeIds.length === 0 && suiInboundIds.length === 0) return toast('请至少选择一个节点', 'error');
+  const hasSui = Object.keys(suiBridges).length > 0;
+  if (nodeIds.length === 0 && !hasSui) return toast('请至少选择一个节点', 'error');
   if (!title) return toast('请填写标题', 'error');
 
-  // NOTE: trafficLimitGB=0 表示无限；留空也表示无限
   const trafficLimitGB = trafficVal === '' ? 0 : parseFloat(trafficVal) || 0;
 
   try {
@@ -1298,7 +1350,7 @@ async function submitEditShare(shareId) {
       body: JSON.stringify({
         title,
         nodeIds,
-        suiInboundIds,
+        suiBridges,
         trafficLimitGB,
         expireAt: expireDate ? new Date(expireDate + 'T23:59:59').toISOString() : null,
         nodeOverrides: Object.keys(_currentNodeOverrides).length > 0 ? _currentNodeOverrides : undefined,

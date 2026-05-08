@@ -1,7 +1,7 @@
 /**
- * share.js - 分享订阅路由
+ * share.js - 分享订阅路由（多区域 s-ui 版）
  * 管理员 API（需认证）+ 公开订阅链接（token 验证）
- * 集成 s-ui 桥接：创建分享时自动在日本服务器创建独立用户，
+ * 集成多台 s-ui 桥接：创建分享时按区域自动创建独立用户，
  * 删除分享时自动删除用户（立即断网）
  */
 
@@ -12,23 +12,48 @@ const { requireAuth } = require('./auth');
 const nodeManager = require('../services/nodeManager');
 const { generate, detectTarget } = require('../services/configGenerator');
 
-// s-ui 桥接服务配置（从环境变量读取，install.sh 自动写入 .env）
-const SUI_BRIDGE_URL = process.env.SUI_BRIDGE_URL || 'http://127.0.0.1:9876';
+// ---- 多 Bridge 基础设施 ----
+
 const SUI_BRIDGE_TOKEN = process.env.SUI_BRIDGE_TOKEN || 'subhub_bridge_change_me';
 
 /**
- * 调用 s-ui 桥接 API
+ * 解析多 bridge 配置（从 SUI_BRIDGES 环境变量）
+ * NOTE: 每个 bridge 对应一个区域的 s-ui 服务器
  */
-function suiBridgeRequest(method, path, body = null) {
+function getAllBridges() {
+  let bridges = [];
+  if (process.env.SUI_BRIDGES) {
+    try { bridges = JSON.parse(process.env.SUI_BRIDGES); } catch {}
+  }
+  if (bridges.length === 0) {
+    bridges = [{ region: 'jp', label: '日本', hostname: '103.200.97.23', port: 9876, token: SUI_BRIDGE_TOKEN }];
+  }
+  return bridges;
+}
+
+/**
+ * 根据 region 获取对应的 bridge 配置
+ */
+function getBridgeConfig(region) {
+  return getAllBridges().find(b => b.region === region);
+}
+
+/**
+ * 向指定区域的 s-ui bridge 发送请求
+ */
+function suiBridgeRequest(region, method, path, body = null) {
+  const bridge = getBridgeConfig(region);
+  if (!bridge) return Promise.reject(new Error(`未找到区域 ${region} 的 bridge 配置`));
+
   return new Promise((resolve, reject) => {
     const bodyStr = body ? JSON.stringify(body) : '';
     const opts = {
-      hostname: '103.200.97.23',
-      port: 9876,
+      hostname: bridge.hostname,
+      port: bridge.port || 9876,
       path: path,
       method,
       headers: {
-        'X-Token': SUI_BRIDGE_TOKEN,
+        'X-Token': bridge.token || SUI_BRIDGE_TOKEN,
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(bodyStr),
       },
@@ -49,30 +74,53 @@ function suiBridgeRequest(method, path, body = null) {
   });
 }
 
+/**
+ * 兼容旧数据：将旧的 suiClientName/suiInboundIds 转换为 suiBridges 格式
+ * NOTE: 旧数据只有 jp 区域，自动迁移
+ */
+function normalizeSuiBridges(share) {
+  if (share.suiBridges) return share.suiBridges;
+  if (share.suiClientName) {
+    return {
+      jp: { clientName: share.suiClientName, inboundIds: share.suiInboundIds || [] }
+    };
+  }
+  return {};
+}
+
 // ---- 管理员 API ----
 
 /**
- * 获取所有分享（同步 s-ui 用户流量）
+ * 获取所有分享（同步多区域 s-ui 用户流量）
  */
 router.get('/', requireAuth, async (req, res) => {
   try {
     const shares = nodeManager.getAllShares();
+    const bridges = getAllBridges();
 
-    // 从桥接读取 s-ui 所有用户的流量数据
-    let suiClients = [];
-    try {
-      const suiData = await suiBridgeRequest('GET', '/api/clients');
-      suiClients = suiData.clients || [];
-    } catch { /* 桥接不可用时不阻塞 */ }
+    // 并行从所有 bridge 获取用户数据
+    const allClientsMap = new Map();
+    await Promise.all(bridges.map(async (bridge) => {
+      try {
+        const data = await suiBridgeRequest(bridge.region, 'GET', '/api/clients');
+        for (const c of (data.clients || [])) {
+          allClientsMap.set(`${bridge.region}:${c.name}`, c);
+        }
+      } catch { /* bridge 不可用时不阻塞 */ }
+    }));
 
-    // 合并 s-ui 流量到分享数据
-    const suiMap = new Map(suiClients.map(c => [c.name, c]));
+    // 合并流量到分享数据
     for (const share of shares) {
-      if (share.suiClientName && suiMap.has(share.suiClientName)) {
-        const client = suiMap.get(share.suiClientName);
-        // NOTE: s-ui 的 up + down 就是该用户的实际流量
-        share.trafficUsed = (client.up || 0) + (client.down || 0);
+      const suiBridges = normalizeSuiBridges(share);
+      let totalTraffic = 0;
+      for (const [region, info] of Object.entries(suiBridges)) {
+        const key = `${region}:${info.clientName}`;
+        const client = allClientsMap.get(key);
+        if (client) {
+          totalTraffic += (client.up || 0) + (client.down || 0);
+        }
       }
+      if (totalTraffic > 0) share.trafficUsed = totalTraffic;
     }
 
     res.json({ success: true, shares });
@@ -82,27 +130,35 @@ router.get('/', requireAuth, async (req, res) => {
 });
 
 /**
- * 获取日本服务器（s-ui）可用协议列表
+ * 获取所有区域的 s-ui 可用入站列表
+ * NOTE: 已由 api.js 的 /api/sui-inbounds 处理，这里保留向下兼容
  */
 router.get('/sui-inbounds', requireAuth, async (req, res) => {
   try {
-    const result = await suiBridgeRequest('GET', '/api/inbounds');
-    res.json(result);
+    const bridges = getAllBridges();
+    const allInbounds = [];
+    await Promise.all(bridges.map(async (bridge) => {
+      try {
+        const data = await suiBridgeRequest(bridge.region, 'GET', '/api/inbounds');
+        for (const ib of (data.inbounds || [])) {
+          allInbounds.push({ ...ib, region: bridge.region });
+        }
+      } catch {}
+    }));
+    res.json({ success: true, inbounds: allInbounds });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
 /**
- * 创建分享
- * @body { title, nodeIds, trafficLimitGB, expireDays, suiEnabled, suiInboundIds }
- * 
- * suiEnabled=true 时，自动在日本 s-ui 创建独立用户，
- * 生成的节点 URI 会自动加入分享
+ * 创建分享（多区域 s-ui 版）
+ * @body { title, nodeIds, trafficLimitGB, expireDays, suiBridges: { jp: { inboundIds }, us: { inboundIds } } }
+ * NOTE: 按区域分别创建 s-ui 用户
  */
 router.post('/', requireAuth, (req, res) => {
   (async () => {
-    const { title, nodeIds = [], trafficLimitGB, expireDays, expireAt, suiEnabled, suiInboundIds } = req.body;
+    const { title, nodeIds = [], trafficLimitGB, expireDays, expireAt, suiBridges: suiBridgesInput } = req.body;
 
     if (!title) {
       return res.status(400).json({ success: false, error: '请填写分享标题' });
@@ -112,50 +168,54 @@ router.post('/', requireAuth, (req, res) => {
     const allNodes = nodeManager.getAllNodes();
     const validIds = nodeIds.filter(id => allNodes.some(n => n.id === id));
 
-    // 如果启用了 s-ui 集成，自动创建日本服务器用户
-    let suiClientName = null;
-    if (suiEnabled) {
-      // NOTE: 使用分享标题作为 s-ui 用户名，方便在面板中识别
-      const safeName = title.replace(/[^a-zA-Z0-9\u4e00-\u9fff_-]/g, '_').substring(0, 30);
-      const suiBody = {
-        name: safeName,
-        inboundIds: suiInboundIds || [1, 2, 3, 4],
-      };
+    // 按区域创建 s-ui 用户
+    const suiBridges = {};
+    const safeName = title.replace(/[^a-zA-Z0-9\u4e00-\u9fff_-]/g, '_').substring(0, 30);
 
-      if (trafficLimitGB) {
-        suiBody.volume = Math.round(trafficLimitGB * 1073741824);
+    if (suiBridgesInput && typeof suiBridgesInput === 'object') {
+      for (const [region, config] of Object.entries(suiBridgesInput)) {
+        const inboundIds = config.inboundIds || [];
+        if (inboundIds.length === 0) continue;
+
+        const bridge = getBridgeConfig(region);
+        if (!bridge) continue;
+
+        const suiBody = { name: safeName, inboundIds };
+        if (trafficLimitGB) {
+          suiBody.volume = Math.round(trafficLimitGB * 1073741824);
+        }
+        if (expireDays) {
+          suiBody.expiry = Math.floor((Date.now() + expireDays * 86400000) / 1000);
+        }
+
+        console.log(`[Share] 调用 ${region} bridge 创建用户:`, safeName);
+        const suiResult = await suiBridgeRequest(region, 'POST', '/api/clients', suiBody);
+        console.log(`[Share] ${region} bridge 返回:`, JSON.stringify(suiResult).substring(0, 200));
+
+        if (!suiResult.success) {
+          console.error(`[Share] ${region} s-ui 创建用户失败:`, suiResult.error);
+          // 不阻塞其他区域，记录错误继续
+          continue;
+        }
+
+        suiBridges[region] = { clientName: safeName, inboundIds };
+        console.log(`[Share] ${region} s-ui 用户创建成功:`, safeName);
       }
-      if (expireDays) {
-        suiBody.expiry = Math.floor((Date.now() + expireDays * 86400000) / 1000);
-      }
-
-      console.log('[Share] 调用 s-ui 桥接创建用户:', safeName);
-      const suiResult = await suiBridgeRequest('POST', '/api/clients', suiBody);
-      console.log('[Share] s-ui 返回:', JSON.stringify(suiResult).substring(0, 200));
-
-      if (!suiResult.success) {
-        return res.status(500).json({ success: false, error: 's-ui 创建用户失败: ' + (suiResult.error || '') });
-      }
-
-      suiClientName = safeName;
-      // NOTE: 不再把 s-ui 返回的 URI 存入本地节点池
-      // 订阅输出时通过 fetchSuiClientLinks 动态拉取 + suiInboundIds 过滤
-      console.log('[Share] s-ui 用户创建成功:', safeName);
     }
 
-    if (validIds.length === 0 && !suiClientName) {
-      return res.status(400).json({ success: false, error: '请至少选择一个节点或启用日本节点' });
+    const hasSui = Object.keys(suiBridges).length > 0;
+    if (validIds.length === 0 && !hasSui) {
+      return res.status(400).json({ success: false, error: '请至少选择一个节点或自建入站' });
     }
 
-    console.log('[Share] 创建分享, 节点数:', validIds.length, 's-ui:', suiClientName || '无');
+    console.log('[Share] 创建分享, 节点数:', validIds.length, 'sui区域:', Object.keys(suiBridges).join(',') || '无');
     const share = nodeManager.createShare({
       title,
       nodeIds: validIds,
       trafficLimit: trafficLimitGB ? Math.round(trafficLimitGB * 1073741824) : 0,
       expireDays: expireDays || null,
       expireAt: expireAt || null,
-      suiClientName: suiClientName,
-      suiInboundIds: suiInboundIds || (suiEnabled ? [1,2,3,4] : undefined),
+      suiBridges: hasSui ? suiBridges : undefined,
     });
 
     console.log('[Share] 创建成功:', share.title, share.id);
@@ -169,11 +229,11 @@ router.post('/', requireAuth, (req, res) => {
 });
 
 /**
- * 更新分享（续期/改流量/改节点/改 s-ui 入站权限）
+ * 更新分享（多区域版：续期/改流量/改节点/改 s-ui 入站权限）
  */
 router.put('/:id', requireAuth, async (req, res) => {
   try {
-    const { trafficLimitGB, expireDays, expireAt, suiInboundIds, nodeOverrides, ...rest } = req.body;
+    const { trafficLimitGB, expireDays, expireAt, suiBridges: suiBridgesInput, nodeOverrides, ...rest } = req.body;
     const updates = { ...rest };
 
     // NOTE: 后端防线 — 过滤掉前端可能误传的纯数字 s-ui inbound ID
@@ -181,48 +241,53 @@ router.put('/:id', requireAuth, async (req, res) => {
       updates.nodeIds = updates.nodeIds.filter(id => id.includes('-'));
     }
 
-    // NOTE: trafficLimitGB=0 或 undefined 表示无限
     if (trafficLimitGB !== undefined) {
       updates.trafficLimit = trafficLimitGB > 0 ? Math.round(trafficLimitGB * 1073741824) : 0;
     }
-    // NOTE: expireAt=null 表示清除到期（永久有效）
     if (expireDays) {
       updates.expireAt = new Date(Date.now() + expireDays * 86400000).toISOString();
     } else if (expireAt !== undefined) {
-      updates.expireAt = expireAt; // null = 永久
+      updates.expireAt = expireAt;
     }
 
-    if (suiInboundIds !== undefined) {
-      updates.suiInboundIds = suiInboundIds;
+    if (suiBridgesInput !== undefined) {
+      updates.suiBridges = suiBridgesInput;
     }
 
-    // NOTE: 存储 per-share 节点覆盖配置（仅影响此分享的订阅输出）
     if (nodeOverrides !== undefined) {
       updates.nodeOverrides = nodeOverrides;
     }
 
-    // NOTE: 在更新前获取旧分享数据，检测标题是否变更
     const oldShare = nodeManager.getShareById(req.params.id);
-    const oldTitle = oldShare ? oldShare.suiClientName : null;
+    if (!oldShare) {
+      return res.status(404).json({ success: false, error: '分享不存在' });
+    }
+    const oldBridges = normalizeSuiBridges(oldShare);
 
     const updated = nodeManager.updateShare(req.params.id, updates);
     if (!updated) {
       return res.status(404).json({ success: false, error: '分享不存在' });
     }
 
-    // NOTE: 先返回响应，s-ui bridge 同步在后台异步执行（避免卡顿）
+    // 先返回响应，s-ui 同步在后台异步执行
     res.json({ success: true, share: updated });
 
-    // 异步同步到 s-ui bridge（名称 + 入站权限 + 流量 + 到期时间）
-    if (oldTitle) {
+    // 异步同步到各区域 s-ui bridge
+    for (const [region, oldInfo] of Object.entries(oldBridges)) {
+      if (!oldInfo.clientName) continue;
       const bridgeBody = {};
 
-      // 标题变更 → 同步重命名 s-ui 用户
-      if (updates.title && updates.title !== oldTitle) {
+      // 标题变更 → 同步重命名
+      if (updates.title && updates.title !== oldInfo.clientName) {
         bridgeBody.newName = updates.title;
       }
 
-      if (suiInboundIds !== undefined) bridgeBody.inboundIds = suiInboundIds;
+      // 入站权限变更
+      const newBridges = suiBridgesInput || {};
+      if (newBridges[region]?.inboundIds) {
+        bridgeBody.inboundIds = newBridges[region].inboundIds;
+      }
+
       if (trafficLimitGB !== undefined) {
         bridgeBody.volume = trafficLimitGB > 0 ? Math.round(trafficLimitGB * 1073741824) : 0;
       }
@@ -231,15 +296,18 @@ router.put('/:id', requireAuth, async (req, res) => {
       }
 
       if (Object.keys(bridgeBody).length > 0) {
-        // NOTE: 用旧名（oldTitle）查找 bridge 中的客户端
-        suiBridgeRequest('PUT', `/api/clients/${encodeURIComponent(oldTitle)}`, bridgeBody)
+        suiBridgeRequest(region, 'PUT', `/api/clients/${encodeURIComponent(oldInfo.clientName)}`, bridgeBody)
           .then(() => {
-            // 改名成功后更新本地 suiClientName
             if (bridgeBody.newName) {
-              nodeManager.updateShare(req.params.id, { suiClientName: bridgeBody.newName });
+              // 更新本地存储的 clientName
+              const currentShare = nodeManager.getShareById(req.params.id);
+              if (currentShare?.suiBridges?.[region]) {
+                currentShare.suiBridges[region].clientName = bridgeBody.newName;
+                nodeManager.updateShare(req.params.id, { suiBridges: currentShare.suiBridges });
+              }
             }
           })
-          .catch(e => console.error(`[Share] s-ui 同步失败: ${e.message}`));
+          .catch(e => console.error(`[Share] ${region} s-ui 同步失败: ${e.message}`));
       }
     }
   } catch (error) {
@@ -248,30 +316,33 @@ router.put('/:id', requireAuth, async (req, res) => {
 });
 
 /**
- * 删除分享
- * 如果分享关联了 s-ui 用户，自动删除该用户（立即断网）
+ * 删除分享（多区域版：遍历所有关联 bridge 删除用户）
  */
 router.delete('/:id', requireAuth, async (req, res) => {
   try {
-    // 先获取分享信息，检查是否有 s-ui 关联
     const share = nodeManager.getShareById(req.params.id);
     if (!share) {
       return res.status(404).json({ success: false, error: '分享不存在' });
     }
 
-    // 如果有 s-ui 用户关联，先删除远端用户（立即断网）
-    if (share.suiClientName) {
+    // 遍历所有关联区域，分别删除 s-ui 用户
+    const suiBridges = normalizeSuiBridges(share);
+    for (const [region, info] of Object.entries(suiBridges)) {
+      if (!info.clientName) continue;
       try {
-        await suiBridgeRequest('DELETE', `/api/clients/${encodeURIComponent(share.suiClientName)}`);
-        console.log(`[Share] 已删除 s-ui 用户: ${share.suiClientName}`);
+        await suiBridgeRequest(region, 'DELETE', `/api/clients/${encodeURIComponent(info.clientName)}`);
+        console.log(`[Share] 已删除 ${region} s-ui 用户: ${info.clientName}`);
       } catch (e) {
-        console.log(`[Share] 删除 s-ui 用户失败: ${e.message}`);
+        console.error(`[Share] 删除 ${region} s-ui 用户失败: ${e.message}`);
       }
-      // 同时清理 SubHub 中的临时节点
+    }
+
+    // 清理本地临时节点
+    if (share.suiClientName) {
       nodeManager.deleteNodesByGroup(`sui-share-${share.suiClientName}`);
     }
 
-    const deleted = nodeManager.deleteShare(req.params.id);
+    nodeManager.deleteShare(req.params.id);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -285,16 +356,19 @@ module.exports = router;
 const { parseURI } = require('../services/nodeParser');
 
 /**
- * 从桥接获取 s-ui 用户的节点 URI 列表
+ * 从指定区域的 bridge 获取 s-ui 用户的节点 URI 列表
  */
-function fetchSuiClientLinks(clientName) {
+function fetchSuiClientLinks(region, clientName) {
+  const bridge = getBridgeConfig(region);
+  if (!bridge) return Promise.resolve([]);
+
   return new Promise((resolve) => {
     const opts = {
-      hostname: '103.200.97.23',
-      port: 9876,
+      hostname: bridge.hostname,
+      port: bridge.port || 9876,
       path: '/api/clients',
       method: 'GET',
-      headers: { 'X-Token': SUI_BRIDGE_TOKEN },
+      headers: { 'X-Token': bridge.token || SUI_BRIDGE_TOKEN },
       timeout: 5000,
     };
     const req = http.request(opts, (res) => {
@@ -305,9 +379,7 @@ function fetchSuiClientLinks(clientName) {
           const parsed = JSON.parse(data);
           const client = (parsed.clients || []).find(c => c.name === clientName);
           if (client && client.links) {
-            // links 是 [{tag, uri}] 数组
-            const uris = client.links.map(l => l.uri).filter(Boolean);
-            resolve(uris);
+            resolve(client.links.map(l => l.uri).filter(Boolean));
           } else {
             resolve([]);
           }
@@ -321,9 +393,9 @@ function fetchSuiClientLinks(clientName) {
 }
 
 /**
- * 处理公开分享订阅请求
+ * 处理公开分享订阅请求（多区域版）
  * 路径: GET /s/:token
- * NOTE: 动态合并 SubHub 节点 + s-ui 用户节点
+ * NOTE: 动态合并 SubHub 节点 + 各区域 s-ui 用户节点
  */
 module.exports.shareSubscribeHandler = async (req, res) => {
   try {
@@ -349,29 +421,32 @@ module.exports.shareSubscribeHandler = async (req, res) => {
       return res.status(410).send(`# 订阅已失效: ${reason.join(', ')}`);
     }
 
-    // 1. SubHub 本地节点（排除 sui_ 前缀的节点，它们会从 s-ui 动态拉取）
+    // 1. SubHub 本地节点
     const allNodes = nodeManager.getAllNodes();
     const shareNodes = share.nodeIds
       .filter(id => !id.startsWith('sui_'))
       .map(id => allNodes.find(n => n.id === id))
       .filter(n => n && n.enabled !== false)
       .map(n => {
-        // NOTE: 应用 per-share 节点覆盖配置（仅改变此订阅的输出，不影响原始数据）
         const ov = (share.nodeOverrides || {})[n.id];
         if (ov) return { ...n, ...ov };
         return n;
       });
 
-    // 2. s-ui 用户节点（动态拉取，按 suiInboundIds 过滤）
-    // NOTE: 从 bridge 获取实际入站列表，用 tag 匹配 links 的 remark 来过滤
+    // 2. 各区域 s-ui 用户节点（按 region 分别拉取 + 按 inboundIds 过滤）
+    const suiBridges = normalizeSuiBridges(share);
     let suiNodes = [];
-    if (share.suiClientName) {
-      // 获取允许的入站 tag 列表
-      let allowedTags = new Set();
-      const allowedIds = new Set(share.suiInboundIds || []);
+
+    for (const [region, info] of Object.entries(suiBridges)) {
+      if (!info.clientName) continue;
+
+      // 获取该区域允许的入站 tag 列表
+      let allowedTags = null;
+      const allowedIds = new Set(info.inboundIds || []);
       if (allowedIds.size > 0) {
         try {
-          const inboundData = await suiBridgeRequest('GET', '/api/inbounds');
+          const inboundData = await suiBridgeRequest(region, 'GET', '/api/inbounds');
+          allowedTags = new Set();
           for (const ib of (inboundData.inbounds || [])) {
             if (allowedIds.has(ib.id)) {
               allowedTags.add(ib.tag);
@@ -383,19 +458,19 @@ module.exports.shareSubscribeHandler = async (req, res) => {
         }
       }
 
-      const uris = await fetchSuiClientLinks(share.suiClientName);
+      const uris = await fetchSuiClientLinks(region, info.clientName);
       for (const uri of uris) {
         try {
           const node = parseURI(uri);
           if (!node) continue;
 
-          // NOTE: 如果有入站过滤，通过节点名称（remark）匹配入站 tag
+          // NOTE: 通过节点名称匹配入站 tag 来过滤
           if (allowedTags && allowedTags.size > 0) {
             const nameMatch = [...allowedTags].some(tag => node.name && node.name.includes(tag));
             if (!nameMatch) continue;
           }
 
-          node.id = `sui_${share.suiClientName}_${node.name || ''}`;
+          node.id = `sui_${region}_${info.clientName}_${node.name || ''}`;
           suiNodes.push(node);
         } catch { /* 跳过解析失败的 */ }
       }

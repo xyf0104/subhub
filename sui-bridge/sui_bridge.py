@@ -307,7 +307,8 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 "delayStart": False, "autoReset": False,
                 "resetDays": 0, "nextReset": 0, "totalUp": 0, "totalDown": 0,
             }
-            notify_sui_change(conn, "new", change_data)
+            # NOTE: s-ui 内部用 action='edit' 触发热重载，'new' 不会生效
+            notify_sui_change(conn, "edit", change_data)
             conn.close()
 
             # 提取 URI 列表返回
@@ -373,11 +374,28 @@ class BridgeHandler(BaseHTTPRequestHandler):
             has_change = new_name or new_inbound_ids is not None or new_volume is not None or new_expiry is not None
             if has_change:
                 conn.commit()
-                # 通知 s-ui 重载
-                notify_sui_change(conn, "save", {
-                    "id": client_id, "name": updated_name,
-                    "inbounds": new_inbound_ids or json.loads(client[2].decode() if isinstance(client[2], bytes) else client[2]),
-                })
+                # NOTE: 读取完整客户端数据用于 notify，s-ui 只认 action='edit' + 完整 obj
+                full = conn.execute(
+                    "SELECT enable, name, config, inbounds, links, volume, expiry, up, down, desc, `group` FROM clients WHERE id=?",
+                    (client_id,)
+                ).fetchone()
+                if full:
+                    raw_config = full[2]
+                    if isinstance(raw_config, bytes): raw_config = raw_config.decode()
+                    raw_inbounds = full[3]
+                    if isinstance(raw_inbounds, bytes): raw_inbounds = raw_inbounds.decode()
+                    notify_sui_change(conn, "edit", {
+                        "enable": bool(full[0]),
+                        "name": full[1],
+                        "config": json.loads(raw_config) if raw_config else {},
+                        "inbounds": json.loads(raw_inbounds) if raw_inbounds else [],
+                        "links": [],
+                        "volume": full[5], "expiry": full[6],
+                        "up": full[7], "down": full[8],
+                        "desc": full[9] or "", "group": full[10] or "",
+                        "delayStart": False, "autoReset": False,
+                        "resetDays": 0, "nextReset": 0, "totalUp": 0, "totalDown": 0,
+                    })
 
             conn.close()
             self.send_json(200, {"success": True, "name": updated_name, "inboundIds": new_inbound_ids})

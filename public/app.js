@@ -755,7 +755,7 @@ async function loadShares() {
           <h4><span class="dot ${statusCls}" style="display:inline-block;margin-right:6px;"></span>${esc(s.title)}</h4>
           <p style="font-family:monospace;font-size:0.82rem;color:var(--accent);cursor:pointer;" onclick="copyText('${url}')" title="点击复制">${url}</p>
           <div class="sub-source-meta">
-            <span>📡 ${(s.nodeIds || []).filter(id => !id.startsWith('sui_')).length + (s.suiInboundIds || []).length} 个节点</span>
+            <span>📡 ${(s.nodeIds || []).filter(id => !id.startsWith('sui_')).length + (s.suiBridges ? Object.values(s.suiBridges).reduce((sum, b) => sum + (b.inboundIds || []).length, 0) : (s.suiInboundIds || []).length)} 个节点</span>
             <span>📊 ${trafficStr}</span>
             <span>⏰ ${expireStr}</span>
             <span>📅 ${new Date(s.createdAt).toLocaleDateString('zh-CN')} 创建</span>
@@ -811,13 +811,17 @@ function renderSuiInboundSelector(checkedMap, inputName = 'suiInbound', containe
   }
   const regionFlags = { jp: '🇯🇵', hk: '🇭🇰', sg: '🇸🇬', us: '🇺🇸' };
   const regionLabels = { jp: '日本', hk: '香港', sg: '新加坡', us: '美国' };
-  // NOTE: 兼容旧版数据（纯数组 → 视为 jp 区域）
+  // NOTE: 兼容多种格式 — 旧版纯数组、新版 { region: [ids] }、suiBridgesData { region: { inboundIds, ... } }
   let checked = {};
   if (Array.isArray(checkedMap)) {
     checked = { jp: new Set(checkedMap) };
   } else if (checkedMap && typeof checkedMap === 'object') {
-    for (const [r, ids] of Object.entries(checkedMap)) {
-      checked[r] = new Set(ids || []);
+    for (const [r, val] of Object.entries(checkedMap)) {
+      if (Array.isArray(val)) {
+        checked[r] = new Set(val);
+      } else if (val && val.inboundIds) {
+        checked[r] = new Set(val.inboundIds);
+      }
     }
   }
   const changeHandler = containerId ? ` onchange="onShareCheckChange('${containerId}')"` : '';
@@ -829,10 +833,17 @@ function renderSuiInboundSelector(checkedMap, inputName = 'suiInbound', containe
     groups[ib.region].push(ib);
   }
 
+  // NOTE: trafficMap 存放每个区域的已有流量配置（编辑时回显）
+  let trafficMap = {};
+  if (checkedMap && !Array.isArray(checkedMap) && typeof checkedMap === 'object') {
+    trafficMap = checkedMap;
+  }
+
   return Object.entries(groups).map(([region, inbounds]) => {
     const flag = regionFlags[region] || '🌍';
     const label = regionLabels[region] || region.toUpperCase();
     const checkedSet = checked[region] || new Set();
+    const existingTraffic = trafficMap[region]?.trafficLimitGB || '';
     return `
     <div style="margin-top:12px;padding:12px;background:var(--bg-input);border-radius:8px;border:1px solid var(--border-color);">
       <div style="font-weight:600;margin-bottom:8px;">${flag} ${label}服务器入站（勾选后自动创建独立用户）</div>
@@ -846,6 +857,11 @@ function renderSuiInboundSelector(checkedMap, inputName = 'suiInbound', containe
           <span>${esc(ib.name)}</span>
           <span class="type-badge ${ib.type==='hysteria2'?'hy2':ib.type}" style="font-size:0.72rem;">${ib.type}</span>
         </label>`).join('')}
+      <div style="margin-top:8px;display:flex;align-items:center;gap:8px;">
+        <label style="font-size:0.82rem;color:var(--text-muted);white-space:nowrap;">📊 ${label}流量 (GB):</label>
+        <input type="number" class="sui-region-traffic" data-region="${region}" value="${existingTraffic}" placeholder="不限" step="1" min="0"
+          style="width:100px;padding:4px 8px;border-radius:6px;border:1px solid var(--border-color);background:var(--bg-card);color:var(--text-primary);font-size:0.85rem;">
+      </div>
     </div>`;
   }).join('');
 }
@@ -1012,8 +1028,8 @@ async function submitShare() {
 }
 
 /**
- * 按 region 分组收集勾选的入站 ID
- * @returns { jp: { inboundIds: [3,5] }, us: { inboundIds: [2] } }
+ * 按 region 分组收集勾选的入站 ID + 区域独立流量
+ * @returns { jp: { inboundIds: [3,5], trafficLimitGB: 100 }, us: { inboundIds: [2], trafficLimitGB: 50 } }
  */
 function collectSuiBridges(inputName) {
   const result = {};
@@ -1023,6 +1039,16 @@ function collectSuiBridges(inputName) {
     if (!region) continue;
     if (!result[region]) result[region] = { inboundIds: [] };
     result[region].inboundIds.push(parseInt(input.value));
+  }
+  // NOTE: 收集每个区域的独立流量设置
+  const trafficInputs = document.querySelectorAll('.sui-region-traffic');
+  for (const input of trafficInputs) {
+    const region = input.dataset.region;
+    if (!region || !result[region]) continue;
+    const val = parseFloat(input.value);
+    if (val > 0) {
+      result[region].trafficLimitGB = val;
+    }
   }
   return result;
 }
@@ -1184,12 +1210,15 @@ async function openEditShare(shareId) {
         </div>
       </div>`;
 
-    // NOTE: 编辑时回显已勾选的入站，构造多区域勾选 Map
+    // NOTE: 编辑时回显已勾选的入站 + 流量配置，传入完整 suiBridgesData
     const suiCheckedMap = {};
     for (const [region, info] of Object.entries(suiBridgesData)) {
       suiCheckedMap[region] = info.inboundIds || [];
+      if (info.trafficLimitGB) {
+        suiCheckedMap[region] = { ids: info.inboundIds || [], trafficLimitGB: info.trafficLimitGB };
+      }
     }
-    buildShareNodeSelector('editShareNodeList', 'editShareNode', _editShareNodes, currentIds, suiCheckedMap);
+    buildShareNodeSelector('editShareNodeList', 'editShareNode', _editShareNodes, currentIds, suiBridgesData);
     modal.classList.add('active');
   } catch (e) { toast(e.message, 'error'); }
 }

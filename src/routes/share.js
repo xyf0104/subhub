@@ -180,12 +180,16 @@ router.post('/', requireAuth, (req, res) => {
         const bridge = getBridgeConfig(region);
         if (!bridge) continue;
 
+        // NOTE: 每个区域使用独立的流量/到期设置，回退到全局设置
+        const regionTraffic = config.trafficLimitGB !== undefined ? config.trafficLimitGB : trafficLimitGB;
+        const regionExpireDays = config.expireDays !== undefined ? config.expireDays : expireDays;
+
         const suiBody = { name: safeName, inboundIds };
-        if (trafficLimitGB) {
-          suiBody.volume = Math.round(trafficLimitGB * 1073741824);
+        if (regionTraffic) {
+          suiBody.volume = Math.round(regionTraffic * 1073741824);
         }
-        if (expireDays) {
-          suiBody.expiry = Math.floor((Date.now() + expireDays * 86400000) / 1000);
+        if (regionExpireDays) {
+          suiBody.expiry = Math.floor((Date.now() + regionExpireDays * 86400000) / 1000);
         }
 
         console.log(`[Share] 调用 ${region} bridge 创建用户:`, safeName);
@@ -194,11 +198,14 @@ router.post('/', requireAuth, (req, res) => {
 
         if (!suiResult.success) {
           console.error(`[Share] ${region} s-ui 创建用户失败:`, suiResult.error);
-          // 不阻塞其他区域，记录错误继续
           continue;
         }
 
-        suiBridges[region] = { clientName: safeName, inboundIds };
+        suiBridges[region] = {
+          clientName: safeName, inboundIds,
+          trafficLimitGB: regionTraffic || undefined,
+          expireDays: regionExpireDays || undefined,
+        };
         console.log(`[Share] ${region} s-ui 用户创建成功:`, safeName);
       }
     }
@@ -275,9 +282,12 @@ router.put('/:id', requireAuth, async (req, res) => {
       const bridge = getBridgeConfig(region);
       if (!bridge) continue;
 
+      // NOTE: 优先使用区域独立的流量/到期，回退到全局设置
+      const regionTraffic = config.trafficLimitGB !== undefined ? config.trafficLimitGB : trafficLimitGB;
+
       const suiBody = { name: safeName, inboundIds };
-      if (trafficLimitGB) {
-        suiBody.volume = Math.round(trafficLimitGB * 1073741824);
+      if (regionTraffic) {
+        suiBody.volume = Math.round(regionTraffic * 1073741824);
       }
       if (updates.expireAt) {
         suiBody.expiry = Math.floor(new Date(updates.expireAt).getTime() / 1000);
@@ -289,7 +299,10 @@ router.put('/:id', requireAuth, async (req, res) => {
       try {
         const result = await suiBridgeRequest(region, 'POST', '/api/clients', suiBody);
         if (result.success) {
-          finalSuiBridges[region] = { clientName: safeName, inboundIds };
+          finalSuiBridges[region] = {
+            clientName: safeName, inboundIds,
+            trafficLimitGB: regionTraffic || undefined,
+          };
           console.log(`[Share] ${region} s-ui 用户创建成功`);
         } else {
           console.error(`[Share] ${region} s-ui 创建失败:`, result.error);
@@ -399,7 +412,8 @@ module.exports = router;
 const { parseURI } = require('../services/nodeParser');
 
 /**
- * 从指定区域的 bridge 获取 s-ui 用户的节点 URI 列表
+ * 从指定区域的 bridge 获取 s-ui 用户的节点信息（URI + remark）
+ * NOTE: 返回 {uri, remark} 对，用于精确匹配入站 tag
  */
 function fetchSuiClientLinks(region, clientName) {
   const bridge = getBridgeConfig(region);
@@ -422,7 +436,8 @@ function fetchSuiClientLinks(region, clientName) {
           const parsed = JSON.parse(data);
           const client = (parsed.clients || []).find(c => c.name === clientName);
           if (client && client.links) {
-            resolve(client.links.map(l => l.uri).filter(Boolean));
+            // NOTE: 返回 {uri, remark}，用于后续的精确匹配
+            resolve(client.links.filter(l => l.uri).map(l => ({ uri: l.uri, remark: l.remark || '' })));
           } else {
             resolve([]);
           }
@@ -496,21 +511,20 @@ module.exports.shareSubscribeHandler = async (req, res) => {
             }
           }
         } catch {
-          // bridge 不可用时放行所有节点
           allowedTags = null;
         }
       }
 
-      const uris = await fetchSuiClientLinks(region, info.clientName);
-      for (const uri of uris) {
+      // NOTE: fetchSuiClientLinks 现在返回 {uri, remark} 对
+      const linkItems = await fetchSuiClientLinks(region, info.clientName);
+      for (const item of linkItems) {
         try {
-          const node = parseURI(uri);
+          const node = parseURI(item.uri);
           if (!node) continue;
 
-          // NOTE: 通过节点名称匹配入站 tag 来过滤
+          // NOTE: 用 remark 精确匹配入站 tag，避免 includes 模糊匹配错漏
           if (allowedTags && allowedTags.size > 0) {
-            const nameMatch = [...allowedTags].some(tag => node.name && node.name.includes(tag));
-            if (!nameMatch) continue;
+            if (!allowedTags.has(item.remark)) continue;
           }
 
           node.id = `sui_${region}_${info.clientName}_${node.name || ''}`;

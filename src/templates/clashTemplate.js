@@ -159,9 +159,12 @@ function generateClashConfig(nodes, options = {}) {
   const proxies = nodes.map(nodeToClashProxy).filter(Boolean);
   const nodeNames = proxies.map(p => p.name);
 
-  // Group nodes by region
+  // NOTE: 只用成功转换为 Clash proxy 的节点来构建地区分组
+  // 不支持的协议（如 anytls）会被 nodeToClashProxy 过滤掉
+  const validNodeSet = new Set(nodeNames);
   const regionNodes = {};
   for (const node of nodes) {
+    if (!validNodeSet.has(node.name)) continue;
     const region = node.region || 'OTHER';
     if (!regionNodes[region]) regionNodes[region] = [];
     regionNodes[region].push(node.name);
@@ -225,10 +228,10 @@ function generateClashConfig(nodes, options = {}) {
   const rules = getClashRules();
 
   // Build config object
+  // NOTE: 精简配置，高级功能（sniffer/tun）交由客户端自行管理
   const config = {
     'mixed-port': 7890,
     'allow-lan': true,
-    'bind-address': '*',
     mode: 'rule',
     'log-level': 'info',
     'external-controller': '127.0.0.1:9090',
@@ -236,67 +239,23 @@ function generateClashConfig(nodes, options = {}) {
     'tcp-concurrent': true,
     'global-client-fingerprint': 'chrome',
 
-    profile: {
-      'store-selected': true,
-      'store-fake-ip': true,
-    },
-
-    sniffer: {
-      enable: true,
-      sniff: {
-        HTTP: { ports: [80, '8080-8880'], 'override-destination': true },
-        TLS: { ports: [443, 8443] },
-        QUIC: { ports: [443, 8443] },
-      },
-      'skip-domain': ['Mijia Cloud'],
-    },
-
-    tun: {
-      enable: false,
-      stack: 'system',
-      'dns-hijack': ['any:53'],
-      'auto-route': true,
-      'auto-detect-interface': true,
-    },
-
     dns: {
       enable: true,
-      listen: '0.0.0.0:1053',
       ipv6: false,
       'enhanced-mode': 'fake-ip',
       'fake-ip-range': '198.18.0.1/16',
       'fake-ip-filter': [
         '*.lan', '*.local', 'localhost',
-        'localhost.ptlogin2.qq.com',
-        '+.srv.nintendo.net',
-        '+.stun.playstation.net',
-        '+.msftconnecttest.com',
-        '+.msftncsi.com',
-        'xbox.*.microsoft.com',
-        '+.xboxlive.com',
-        'WORKGROUP',
-        'time.*.com', 'time.*.gov', 'time.*.edu.cn',
-        'ntp.*.com',
-        '+.market.xiaomi.com',
+        '+.msftconnecttest.com', '+.msftncsi.com',
       ],
       'default-nameserver': [
         '223.5.5.5',
         '119.29.29.29',
       ],
       nameserver: [
-        'https://dns.alidns.com/dns-query',
-        'https://doh.pub/dns-query',
+        '223.5.5.5',
+        '119.29.29.29',
       ],
-      fallback: [
-        'https://dns.google/dns-query',
-        'https://cloudflare-dns.com/dns-query',
-        'tls://8.8.4.4:853',
-      ],
-      'fallback-filter': {
-        geoip: true,
-        'geoip-code': 'CN',
-        ipcidr: ['240.0.0.0/4'],
-      },
     },
 
     proxies,

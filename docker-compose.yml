@@ -12,6 +12,7 @@ services:
       - COOKIE_SECRET=${COOKIE_SECRET:-subhub-secret-change-me}
       - SUI_BRIDGE_URL=${SUI_BRIDGE_URL:-}
       - SUI_BRIDGE_TOKEN=${SUI_BRIDGE_TOKEN:-}
+      - SUI_BRIDGES=${SUI_BRIDGES:-}
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"

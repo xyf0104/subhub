@@ -177,10 +177,14 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
         if self.path == "/api/clients":
             conn = sqlite3.connect(DB_PATH)
-            rows = conn.execute("SELECT id, enable, name, links, volume, expiry, down, up FROM clients").fetchall()
+            rows = conn.execute("SELECT id, enable, name, config, volume, expiry, down, up FROM clients").fetchall()
             clients = []
             for r in rows:
-                links = json.loads(r[3].decode()) if isinstance(r[3], bytes) and r[3] else []
+                config = json.loads(r[3]) if r[3] else {}
+                password = config.get("password", "")
+                uid = config.get("id", "")
+                # NOTE: 实时动态生成 links，不依赖数据库中的历史值
+                links = get_client_links(r[2], password, uid)
                 clients.append({
                     "id": r[0], "enable": bool(r[1]), "name": r[2],
                     "links": links, "volume": r[4], "expiry": r[5],

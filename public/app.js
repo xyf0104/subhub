@@ -824,7 +824,7 @@ function renderSuiInboundSelector(checkedMap, inputName = 'suiInbound', containe
       }
     }
   }
-  const changeHandler = containerId ? ` onchange="onShareCheckChange('${containerId}')"` : '';
+  const changeHandler = containerId ? ` onchange="onShareCheckChange('${containerId}');updateRegionConfigVisibility()"` : '';
 
   // 按 region 分组
   const groups = {};
@@ -875,21 +875,44 @@ function buildRegionConfigRows(suiBridgesData = {}) {
     if (data.expireAt) {
       expireVal = new Date(data.expireAt).toISOString().split('T')[0];
     }
+    // NOTE: 完全复制上方全局配置行的布局结构
+    const trafficId = `regionTraffic_${region}`;
+    const expireId = `regionExpire_${region}`;
     return `
-    <div class="edit-share-form" style="margin-top:6px;padding:8px 0;border-top:1px dashed var(--border-color);">
-      <div style="font-size:0.85rem;font-weight:600;margin-bottom:6px;color:var(--text-secondary);">${flag} ${label} s-ui 配置</div>
-      <div style="display:flex;gap:12px;flex-wrap:wrap;">
-        <div class="form-group" style="flex:1;min-width:120px;">
-          <label style="font-size:0.8rem;">📊 ${label}流量 (GB)</label>
-          <input class="form-input sui-region-traffic" data-region="${region}" type="number" step="1" min="0" value="${trafficVal}" placeholder="不限">
+    <div class="edit-share-form sui-region-config" data-region="${region}">
+      <div class="form-group">
+        <label>${flag} ${label} s-ui</label>
+        <input class="form-input" disabled value="${label}自建节点配置" style="opacity:0.5;font-size:0.8rem;">
+      </div>
+      <div class="form-group">
+        <label>📊 ${label}流量 (GB)</label>
+        <div class="input-with-btn">
+          <input class="form-input sui-region-traffic" id="${trafficId}" data-region="${region}" type="number" step="1" min="0" value="${trafficVal}" placeholder="不限">
+          <button type="button" class="btn-infinity" title="设为无限" onclick="document.getElementById('${trafficId}').value='';toast('${label}流量已设为无限','success')">♾️</button>
         </div>
-        <div class="form-group" style="flex:1;min-width:160px;">
-          <label style="font-size:0.8rem;">⏰ ${label}到期</label>
-          <input class="form-input sui-region-expire" data-region="${region}" type="date" value="${expireVal}">
+      </div>
+      <div class="form-group">
+        <label>⏰ ${label}到期</label>
+        <div class="input-with-btn">
+          <input class="form-input sui-region-expire" id="${expireId}" data-region="${region}" type="date" value="${expireVal}">
+          <button type="button" class="btn-infinity" title="设为永久" onclick="document.getElementById('${expireId}').value='';toast('${label}已设为永久有效','success')">♾️</button>
         </div>
       </div>
     </div>`;
   }).join('');
+}
+
+/**
+ * 根据底部入站勾选状态，动态显示/隐藏区域配置行
+ * NOTE: 在入站 checkbox 变化时调用
+ */
+function updateRegionConfigVisibility() {
+  const configs = document.querySelectorAll('.sui-region-config');
+  for (const cfg of configs) {
+    const region = cfg.dataset.region;
+    const hasChecked = document.querySelector(`input[type=checkbox][data-region="${region}"]:checked`);
+    cfg.style.display = hasChecked ? '' : 'none';
+  }
 }
 
 let _shareNodes = [];
@@ -959,6 +982,8 @@ function buildShareNodeSelector(containerId, inputName, nodes, checkedSet, suiIn
   `;
   // NOTE: 用实际 DOM 勾选数刷新计数，checkedSet 可能含不在列表中的 sui_ 节点
   onShareCheckChange(containerId);
+  // NOTE: 根据已勾选的入站动态显示/隐藏区域配置行
+  setTimeout(() => updateRegionConfigVisibility(), 0);
 }
 
 /**

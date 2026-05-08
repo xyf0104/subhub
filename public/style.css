@@ -623,4 +623,53 @@ textarea.form-input {
   .nodes-toolbar-left { flex-direction: column; }
   .nodes-filter-select { max-width: 100%; }
   .share-node-toolbar { flex-direction: column; }
+
+  /* 分享卡片 — 紧凑布局 */
+  .sub-source-card {
+    flex-direction: column; align-items: stretch; gap: 8px;
+    padding: 12px 14px;
+  }
+  .sub-source-info h4 { font-size: 0.95rem; }
+  .sub-source-info p {
+    font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; max-width: 100%;
+  }
+  .sub-source-meta {
+    display: flex; flex-wrap: nowrap; gap: 8px; overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .sub-source-meta span {
+    font-size: 0.72rem; white-space: nowrap; flex-shrink: 0;
+  }
+  /* 操作按钮 — 紧凑横排不换行 */
+  .sub-source-actions {
+    display: flex; gap: 4px; flex-wrap: nowrap; justify-content: flex-start;
+  }
+  .sub-source-actions .btn {
+    font-size: 0.72rem; padding: 4px 8px; white-space: nowrap;
+  }
+
+  /* 编辑模态框 — 配置区单列 */
+  .edit-share-form {
+    grid-template-columns: 1fr !important;
+  }
+  .modal.modal-compact {
+    max-width: 95vw !important; width: 100% !important;
+  }
+  .modal-body { padding: 8px 12px !important; }
+
+  /* 已选节点行 */
+  .selected-node-row { font-size: 0.82rem; gap: 4px; }
+  .selected-node-row .btn { font-size: 0.65rem; padding: 2px 6px; }
+
+  /* 仪表盘统计卡片 */
+  .stats-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .stat-card { padding: 12px; }
+  .stat-card .value { font-size: 1.3rem; }
+  .stat-card .label { font-size: 0.72rem; }
+
+  /* 页面布局 */
+  .page-header { padding: 12px 14px; }
+  .page-header h2 { font-size: 1.1rem; }
+  .page-body { padding: 12px 14px; }
 }

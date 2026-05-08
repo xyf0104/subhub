@@ -145,12 +145,22 @@ def get_client_links(name, password, uid):
 
 
 def notify_sui_change(conn, action, data):
-    """向 changes 表写入变更记录，触发 s-ui 热重载"""
+    """
+    重启 s-ui 服务强制重载 sing-box 核心配置
+    NOTE: changes 表写入不会触发实际的代理配置重载，
+    必须重启 s-ui 才能让新客户端生效（可上网）
+    """
+    import subprocess
     conn.execute(
         "INSERT INTO changes (date_time, actor, key, action, obj) VALUES (?, ?, ?, ?, ?)",
         (int(time.time()), "subhub", "clients", action, json.dumps(data, indent=2).encode())
     )
     conn.commit()
+    try:
+        subprocess.run(["systemctl", "restart", "s-ui"], timeout=10, check=False)
+        print(f"[Bridge] s-ui 已重启，配置已生效 (action={action})")
+    except Exception as e:
+        print(f"[Bridge] s-ui 重启失败: {e}")
 
 
 class BridgeHandler(BaseHTTPRequestHandler):

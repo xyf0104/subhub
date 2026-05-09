@@ -542,46 +542,47 @@ module.exports.shareSubscribeHandler = async (req, res) => {
         return n;
       });
 
-    // 2. 各区域 s-ui 用户节点（按 region 分别拉取 + 按 inboundIds 过滤）
+    // 2. 各区域 s-ui 用户节点（并行拉取 + 按 inboundIds 过滤）
     const suiBridges = normalizeSuiBridges(share);
     let suiNodes = [];
 
-    for (const [region, info] of Object.entries(suiBridges)) {
-      if (!info.clientName) continue;
+    // NOTE: 所有区域并行请求，避免串行等待导致 4-5 秒延迟
+    const regionTasks = Object.entries(suiBridges).map(async ([region, info]) => {
+      if (!info.clientName) return [];
+      const nodes = [];
 
-      // 获取该区域允许的入站 tag 列表 + tag→id 映射（用于 override）
       let allowedTags = null;
       const allowedIds = new Set(info.inboundIds || []);
       const tagToId = {};
-      if (allowedIds.size > 0) {
-        try {
-          const inboundData = await suiBridgeRequest(region, 'GET', '/api/inbounds');
-          allowedTags = new Set();
-          for (const ib of (inboundData.inbounds || [])) {
-            if (allowedIds.has(ib.id)) {
-              allowedTags.add(ib.tag);
-              tagToId[ib.tag] = ib.id;
-            }
+
+      // 并行获取 inbounds 和 links
+      const [inboundData, linkItems] = await Promise.all([
+        allowedIds.size > 0
+          ? suiBridgeRequest(region, 'GET', '/api/inbounds').catch(() => null)
+          : Promise.resolve(null),
+        fetchSuiClientLinks(region, info.clientName),
+      ]);
+
+      if (inboundData && allowedIds.size > 0) {
+        allowedTags = new Set();
+        for (const ib of (inboundData.inbounds || [])) {
+          if (allowedIds.has(ib.id)) {
+            allowedTags.add(ib.tag);
+            tagToId[ib.tag] = ib.id;
           }
-        } catch {
-          allowedTags = null;
         }
       }
 
-      // NOTE: fetchSuiClientLinks 现在返回 {uri, remark} 对
-      const linkItems = await fetchSuiClientLinks(region, info.clientName);
       const suiOverrides = share.suiNodeOverrides || {};
       for (const item of linkItems) {
         try {
           const node = parseURI(item.uri);
           if (!node) continue;
 
-          // NOTE: 用 remark 精确匹配入站 tag，避免 includes 模糊匹配错漏
           if (allowedTags && allowedTags.size > 0) {
             if (!allowedTags.has(item.remark)) continue;
           }
 
-          // NOTE: 应用该分享的自建节点覆盖（名称/端口/服务器/SNI）
           const inboundId = tagToId[item.remark];
           if (inboundId) {
             const ov = suiOverrides[`${region}_${inboundId}`];
@@ -597,9 +598,15 @@ module.exports.shareSubscribeHandler = async (req, res) => {
           }
 
           node.id = `sui_${region}_${info.clientName}_${node.name || ''}`;
-          suiNodes.push(node);
+          nodes.push(node);
         } catch { /* 跳过解析失败的 */ }
       }
+      return nodes;
+    });
+
+    const regionResults = await Promise.all(regionTasks);
+    for (const nodes of regionResults) {
+      suiNodes.push(...nodes);
     }
 
     // NOTE: 自建节点优先排列在最前面
@@ -627,8 +634,8 @@ module.exports.shareSubscribeHandler = async (req, res) => {
       userinfo.push(`expire=${Math.floor(new Date(share.expireAt).getTime() / 1000)}`);
     }
     res.setHeader('Subscription-Userinfo', userinfo.join('; '));
-    // NOTE: profile-title 用 base64 编码，Shadowrocket/V2RayN 等客户端识别订阅名称
-    res.setHeader('Profile-Title', Buffer.from(share.title).toString('base64'));
+    // NOTE: 'base64:xxx' 前缀格式是 Shadowrocket/V2RayN 识别订阅名称的标准格式
+    res.setHeader('Profile-Title', 'base64:' + Buffer.from(share.title).toString('base64'));
     // NOTE: Content-Disposition 使用 generate 返回的 filename，不再硬编码 .yaml
     const fname = result.filename || `${share.title}.txt`;
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fname)}"; filename*=UTF-8''${encodeURIComponent(fname)}`);

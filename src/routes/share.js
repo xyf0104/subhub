@@ -602,7 +602,8 @@ module.exports.shareSubscribeHandler = async (req, res) => {
       }
     }
 
-    const allShareNodes = [...shareNodes, ...suiNodes];
+    // NOTE: 自建节点优先排列在最前面
+    const allShareNodes = [...suiNodes, ...shareNodes];
 
     if (allShareNodes.length === 0) {
       return res.status(404).send('# 暂无可用节点');
@@ -626,9 +627,11 @@ module.exports.shareSubscribeHandler = async (req, res) => {
       userinfo.push(`expire=${Math.floor(new Date(share.expireAt).getTime() / 1000)}`);
     }
     res.setHeader('Subscription-Userinfo', userinfo.join('; '));
-    // NOTE: profile-title 是小火箭/V2RayN 等客户端识别订阅名称的关键头
+    // NOTE: profile-title 用 base64 编码，Shadowrocket/V2RayN 等客户端识别订阅名称
     res.setHeader('Profile-Title', Buffer.from(share.title).toString('base64'));
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(share.title)}.yaml"; filename*=UTF-8''${encodeURIComponent(share.title)}.yaml`);
+    // NOTE: Content-Disposition 使用 generate 返回的 filename，不再硬编码 .yaml
+    const fname = result.filename || `${share.title}.txt`;
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fname)}"; filename*=UTF-8''${encodeURIComponent(fname)}`);
     res.setHeader('Profile-Update-Interval', '24');
 
     res.type(result.contentType).send(result.content);

@@ -17,6 +17,24 @@ const { generate, detectTarget } = require('../services/configGenerator');
 const SUI_BRIDGE_TOKEN = process.env.SUI_BRIDGE_TOKEN || 'subhub_bridge_change_me';
 
 /**
+ * Bridge API 请求缓存
+ * NOTE: 避免每次订阅请求都向远程 bridge 发 HTTP，60 秒内复用缓存
+ */
+const BRIDGE_CACHE = new Map();
+const BRIDGE_CACHE_TTL = 60_000;
+
+function getCachedOrFetch(cacheKey, fetcher) {
+  const cached = BRIDGE_CACHE.get(cacheKey);
+  if (cached && Date.now() - cached.ts < BRIDGE_CACHE_TTL) {
+    return Promise.resolve(cached.data);
+  }
+  return fetcher().then(data => {
+    BRIDGE_CACHE.set(cacheKey, { data, ts: Date.now() });
+    return data;
+  });
+}
+
+/**
  * 解析多 bridge 配置（从 SUI_BRIDGES 环境变量）
  * NOTE: 每个 bridge 对应一个区域的 s-ui 服务器
  */
@@ -45,6 +63,19 @@ function suiBridgeRequest(region, method, path, body = null) {
   const bridge = getBridgeConfig(region);
   if (!bridge) return Promise.reject(new Error(`未找到区域 ${region} 的 bridge 配置`));
 
+  // NOTE: GET 请求使用缓存，写操作清空缓存确保数据一致
+  if (method === 'GET' && !body) {
+    const cacheKey = `bridge_${region}_${path}`;
+    return getCachedOrFetch(cacheKey, () => _rawBridgeRequest(bridge, method, path, null));
+  }
+  // 写操作清空该区域缓存
+  for (const key of BRIDGE_CACHE.keys()) {
+    if (key.includes(region)) BRIDGE_CACHE.delete(key);
+  }
+  return _rawBridgeRequest(bridge, method, path, body);
+}
+
+function _rawBridgeRequest(bridge, method, path, body) {
   return new Promise((resolve, reject) => {
     const bodyStr = body ? JSON.stringify(body) : '';
     const opts = {
@@ -470,7 +501,9 @@ function fetchSuiClientLinks(region, clientName) {
   const bridge = getBridgeConfig(region);
   if (!bridge) return Promise.resolve([]);
 
-  return new Promise((resolve) => {
+  // NOTE: 缓存 key 包含 region，同区域所有用户共享一次 API 调用
+  const cacheKey = `clients_${region}`;
+  return getCachedOrFetch(cacheKey, () => new Promise((resolve) => {
     const opts = {
       hostname: bridge.hostname,
       port: bridge.port || 9876,
@@ -483,21 +516,19 @@ function fetchSuiClientLinks(region, clientName) {
       let data = '';
       res.on('data', c => data += c);
       res.on('end', () => {
-        try {
-          const parsed = JSON.parse(data);
-          const client = (parsed.clients || []).find(c => c.name === clientName);
-          if (client && client.links) {
-            // NOTE: 返回 {uri, remark}，用于后续的精确匹配
-            resolve(client.links.filter(l => l.uri).map(l => ({ uri: l.uri, remark: l.remark || '' })));
-          } else {
-            resolve([]);
-          }
-        } catch { resolve([]); }
+        try { resolve(JSON.parse(data)); }
+        catch { resolve({ clients: [] }); }
       });
     });
-    req.on('error', () => resolve([]));
-    req.on('timeout', () => { req.destroy(); resolve([]); });
+    req.on('error', () => resolve({ clients: [] }));
+    req.on('timeout', () => { req.destroy(); resolve({ clients: [] }); });
     req.end();
+  })).then(parsed => {
+    const client = (parsed.clients || []).find(c => c.name === clientName);
+    if (client && client.links) {
+      return client.links.filter(l => l.uri).map(l => ({ uri: l.uri, remark: l.remark || '' }));
+    }
+    return [];
   });
 }
 

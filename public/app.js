@@ -747,7 +747,8 @@ async function loadShares() {
       const overTraffic = s.trafficLimit > 0 && s.trafficUsed >= s.trafficLimit;
       const status = !s.enabled ? '已禁用' : expired ? '已过期' : overTraffic ? '流量用完' : '正常';
       const statusCls = status === '正常' ? 'active' : 'inactive';
-      const url = `${host}/s/${s.token}`;
+      // NOTE: URL fragment (#标题) 让 Shadowrocket 等客户端显示自定义订阅名
+      const url = `${host}/s/${s.token}#${encodeURIComponent(s.title)}`;
       const trafficStr = s.trafficLimit > 0 ? `${formatBytes(s.trafficUsed)} / ${formatBytes(s.trafficLimit)}` : '不限流量';
       const expireStr = s.expireAt ? new Date(s.expireAt).toLocaleDateString('zh-CN') : '永久有效';
       return `<div class="sub-source-card">
@@ -1154,7 +1155,8 @@ function showShareLinks(token, title) {
     {label:'自动检测', target:'', icon:'🤖'},
   ];
   const links = targets.map(t => {
-    const url = `${host}/s/${token}${t.target ? '?target=' + t.target : ''}`;
+    // NOTE: URL fragment (#标题) 让 Shadowrocket 等客户端显示自定义订阅名
+    const url = `${host}/s/${token}${t.target ? '?target=' + t.target : ''}#${encodeURIComponent(title)}`;
     return `<div class="sub-link-row">
       <span class="sub-link-label">${t.icon} ${t.label}</span>
       <span class="sub-link-url" title="${url}">${url}</span>

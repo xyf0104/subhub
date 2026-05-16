@@ -140,8 +140,9 @@ function parseHysteria2(uri) {
     node.obfsPassword = params['obfs-password'] || '';
   }
   if (params.alpn) node.alpn = params.alpn.split(',');
-  if (params.up) node.up = params.up;
-  if (params.down) node.down = params.down;
+  // NOTE: s-ui 用 upmbps/downmbps，其他客户端用 up/down
+  if (params.up || params.upmbps) node.up = params.up || params.upmbps;
+  if (params.down || params.downmbps) node.down = params.down || params.downmbps;
 
   if (!node.name) node.name = `HY2-${node.server}`;
   node.region = detectRegion(node.name, node.server);
@@ -554,15 +555,20 @@ function nodeToURI(node) {
   switch (node.type) {
     case 'hysteria2': {
       const params = new URLSearchParams();
+      // NOTE: Passwall 需要 security=tls 才能识别 TLS 连接
+      params.set('security', 'tls');
       if (node.sni) params.set('sni', node.sni);
       if (node.skipCertVerify) params.set('insecure', '1');
+      if (node.up) params.set('upmbps', node.up);
+      if (node.down) params.set('downmbps', node.down);
       if (node.obfs) {
         params.set('obfs', node.obfs);
         if (node.obfsPassword) params.set('obfs-password', node.obfsPassword);
       }
       if (node.alpn?.length) params.set('alpn', node.alpn.join(','));
       const qs = params.toString();
-      return `hy2://${encodeURIComponent(node.password)}@${node.server}:${node.port}${qs ? '?' + qs : ''}#${encodeURIComponent(node.name)}`;
+      // NOTE: 使用标准 hysteria2:// 而非 hy2://，兼容 Passwall 等路由器客户端
+      return `hysteria2://${encodeURIComponent(node.password)}@${node.server}:${node.port}${qs ? '?' + qs : ''}#${encodeURIComponent(node.name)}`;
     }
     case 'vless': {
       const params = new URLSearchParams();

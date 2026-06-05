@@ -98,13 +98,13 @@ if [ -f "$BRIDGE_SCRIPT" ]; then
 fi
 
 info "下载 sui_bridge.py ..."
-if curl -sL --connect-timeout 10 "$SCRIPT_URL" -o "$BRIDGE_SCRIPT.tmp" 2>/dev/null && [ -s "$BRIDGE_SCRIPT.tmp" ]; then
+if curl -sLk --connect-timeout 10 "$SCRIPT_URL" -o "$BRIDGE_SCRIPT.tmp" 2>/dev/null && [ -s "$BRIDGE_SCRIPT.tmp" ]; then
     mv "$BRIDGE_SCRIPT.tmp" "$BRIDGE_SCRIPT"
     info "下载成功"
 else
-    warn "从 Gitee 下载失败，尝试从 GitHub 下载..."
-    GITHUB_URL="https://raw.githubusercontent.com/ranxiaoer/subhub/main/sui-bridge/sui_bridge.py"
-    if curl -sL --connect-timeout 10 "$GITHUB_URL" -o "$BRIDGE_SCRIPT.tmp" 2>/dev/null && [ -s "$BRIDGE_SCRIPT.tmp" ]; then
+    warn "从主服务器下载失败，尝试从 Gitee 下载..."
+    GITEE_URL="https://gitee.com/ranxiaoer/subhub/raw/main/sui-bridge/sui_bridge.py"
+    if curl -sLk --connect-timeout 10 "$GITEE_URL" -o "$BRIDGE_SCRIPT.tmp" 2>/dev/null && [ -s "$BRIDGE_SCRIPT.tmp" ]; then
         mv "$BRIDGE_SCRIPT.tmp" "$BRIDGE_SCRIPT"
         info "从 GitHub 下载成功"
     else

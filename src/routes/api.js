@@ -453,5 +453,186 @@ router.get('/sui-inbounds', requireAuth, async (req, res) => {
     res.json({ success: false, error: error.message, inbounds: [] });
   }
 });
+// ==================== Bridge 管理 ====================
+
+const fs = require('fs');
+const path = require('path');
+const BRIDGES_FILE = path.join(__dirname, '../data/bridges.json');
+
+/**
+ * 读取 bridges.json
+ * NOTE: 环境变量 SUI_BRIDGES 作为 fallback，面板管理后优先使用 JSON 文件
+ */
+function loadBridges() {
+  try {
+    if (fs.existsSync(BRIDGES_FILE)) {
+      const data = JSON.parse(fs.readFileSync(BRIDGES_FILE, 'utf8'));
+      if (Array.isArray(data) && data.length > 0) return data;
+    }
+  } catch {}
+  // fallback: 从环境变量读取并迁移到文件
+  if (process.env.SUI_BRIDGES) {
+    try {
+      const envBridges = JSON.parse(process.env.SUI_BRIDGES);
+      if (envBridges.length > 0) {
+        const migrated = envBridges.map(b => ({
+          id: `bridge_${b.region}_${Date.now()}`,
+          region: b.region,
+          label: b.label || b.region,
+          hostname: b.hostname,
+          port: b.port || 9876,
+          token: b.token,
+          createdAt: new Date().toISOString(),
+        }));
+        saveBridges(migrated);
+        return migrated;
+      }
+    } catch {}
+  }
+  return [];
+}
+
+function saveBridges(bridges) {
+  fs.writeFileSync(BRIDGES_FILE, JSON.stringify(bridges, null, 2));
+}
+
+/**
+ * 测试 Bridge 连接
+ * @returns {Promise<{success, clients, latency, error}>}
+ */
+function testBridgeConnection(hostname, port, token) {
+  return new Promise((resolve) => {
+    const http = require('http');
+    const start = Date.now();
+    const opts = {
+      hostname, port,
+      path: '/health',
+      method: 'GET',
+      headers: { 'X-Token': token },
+      timeout: 5000,
+    };
+    const req = http.request(opts, (resp) => {
+      let body = '';
+      resp.on('data', c => body += c);
+      resp.on('end', () => {
+        const latency = Date.now() - start;
+        try {
+          const data = JSON.parse(body);
+          resolve({ success: data.status === 'ok', clients: data.clients || 0, latency });
+        } catch {
+          resolve({ success: false, error: '响应解析失败', latency });
+        }
+      });
+    });
+    req.on('timeout', () => { req.destroy(); resolve({ success: false, error: '连接超时' }); });
+    req.on('error', (e) => resolve({ success: false, error: e.message }));
+    req.end();
+  });
+}
+
+/** 获取所有 Bridge（token 脱敏） */
+router.get('/bridges', requireAuth, async (req, res) => {
+  const bridges = loadBridges();
+  // NOTE: 并行测试所有 bridge 状态
+  const results = await Promise.all(bridges.map(async (b) => {
+    const test = await testBridgeConnection(b.hostname, b.port, b.token);
+    return {
+      ...b,
+      token: b.token.substring(0, 8) + '****',
+      status: test.success ? 'online' : 'offline',
+      clients: test.clients || 0,
+      latency: test.latency || 0,
+    };
+  }));
+  res.json({ success: true, bridges: results });
+});
+
+/** 添加新 Bridge */
+router.post('/bridges', requireAuth, async (req, res) => {
+  try {
+    const { region, label, hostname, port, token } = req.body;
+    if (!region || !hostname || !token) {
+      return res.status(400).json({ success: false, error: '缺少必填参数 (region, hostname, token)' });
+    }
+
+    // 测试连接
+    const test = await testBridgeConnection(hostname, port || 9876, token);
+    if (!test.success) {
+      return res.status(400).json({
+        success: false,
+        error: `连接测试失败: ${test.error || '无法连接到 Bridge'}，请确认服务器已部署 sui_bridge.py`
+      });
+    }
+
+    const bridges = loadBridges();
+    // 检查 region 是否重复
+    if (bridges.find(b => b.region === region)) {
+      return res.status(400).json({ success: false, error: `区域 "${region}" 已存在` });
+    }
+
+    const newBridge = {
+      id: `bridge_${region}_${Date.now()}`,
+      region,
+      label: label || region,
+      hostname,
+      port: port || 9876,
+      token,
+      createdAt: new Date().toISOString(),
+    };
+    bridges.push(newBridge);
+    saveBridges(bridges);
+
+    res.json({ success: true, bridge: { ...newBridge, token: token.substring(0, 8) + '****' }, test });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+/** 更新 Bridge */
+router.put('/bridges/:id', requireAuth, async (req, res) => {
+  try {
+    const bridges = loadBridges();
+    const idx = bridges.findIndex(b => b.id === req.params.id);
+    if (idx === -1) return res.status(404).json({ success: false, error: 'Bridge 不存在' });
+
+    const { label, hostname, port, token } = req.body;
+    if (label) bridges[idx].label = label;
+    if (hostname) bridges[idx].hostname = hostname;
+    if (port) bridges[idx].port = port;
+    if (token) bridges[idx].token = token;
+
+    // 测试更新后的连接
+    const test = await testBridgeConnection(bridges[idx].hostname, bridges[idx].port, bridges[idx].token);
+
+    saveBridges(bridges);
+    res.json({ success: true, bridge: { ...bridges[idx], token: bridges[idx].token.substring(0, 8) + '****' }, test });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+/** 删除 Bridge */
+router.delete('/bridges/:id', requireAuth, (req, res) => {
+  const bridges = loadBridges();
+  const idx = bridges.findIndex(b => b.id === req.params.id);
+  if (idx === -1) return res.status(404).json({ success: false, error: 'Bridge 不存在' });
+
+  const removed = bridges.splice(idx, 1)[0];
+  saveBridges(bridges);
+  res.json({ success: true, deleted: removed.region });
+});
+
+/** 手动测试 Bridge 连接 */
+router.post('/bridges/:id/test', requireAuth, async (req, res) => {
+  const bridges = loadBridges();
+  const bridge = bridges.find(b => b.id === req.params.id);
+  if (!bridge) return res.status(404).json({ success: false, error: 'Bridge 不存在' });
+
+  const test = await testBridgeConnection(bridge.hostname, bridge.port, bridge.token);
+  res.json({ success: true, ...test });
+});
+
+// NOTE: 导出 loadBridges 供 share.js 使用
+router.loadBridges = loadBridges;
 
 module.exports = router;

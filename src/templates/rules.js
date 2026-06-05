@@ -336,6 +336,7 @@ function getProxyGroups() {
 
 function getRegionGroups() {
   return {
+    // NOTE: 主要地区
     'HK': { name: '🇭🇰 香港', emoji: '🇭🇰' },
     'JP': { name: '🇯🇵 日本', emoji: '🇯🇵' },
     'SG': { name: '🇸🇬 新加坡', emoji: '🇸🇬' },
@@ -344,6 +345,39 @@ function getRegionGroups() {
     'KR': { name: '🇰🇷 韩国', emoji: '🇰🇷' },
     'UK': { name: '🇬🇧 英国', emoji: '🇬🇧' },
     'DE': { name: '🇩🇪 德国', emoji: '🇩🇪' },
+    'AU': { name: '🇦🇺 澳洲', emoji: '🇦🇺' },
+    'CA': { name: '🇨🇦 加拿大', emoji: '🇨🇦' },
+    'FR': { name: '🇫🇷 法国', emoji: '🇫🇷' },
+    'NL': { name: '🇳🇱 荷兰', emoji: '🇳🇱' },
+    'RU': { name: '🇷🇺 俄罗斯', emoji: '🇷🇺' },
+    'IN': { name: '🇮🇳 印度', emoji: '🇮🇳' },
+    // NOTE: 南美洲
+    'AR': { name: '🇦🇷 阿根廷', emoji: '🇦🇷' },
+    'BR': { name: '🇧🇷 巴西', emoji: '🇧🇷' },
+    'CL': { name: '🇨🇱 智利', emoji: '🇨🇱' },
+    'CO': { name: '🇨🇴 哥伦比亚', emoji: '🇨🇴' },
+    'UY': { name: '🇺🇾 乌拉圭', emoji: '🇺🇾' },
+    'PE': { name: '🇵🇪 秘鲁', emoji: '🇵🇪' },
+    'MX': { name: '🇲🇽 墨西哥', emoji: '🇲🇽' },
+    'EC': { name: '🇪🇨 厄瓜多尔', emoji: '🇪🇨' },
+    // NOTE: 东南亚
+    'TH': { name: '🇹🇭 泰国', emoji: '🇹🇭' },
+    'VN': { name: '🇻🇳 越南', emoji: '🇻🇳' },
+    'PH': { name: '🇵🇭 菲律宾', emoji: '🇵🇭' },
+    'MY': { name: '🇲🇾 马来西亚', emoji: '🇲🇾' },
+    'ID': { name: '🇮🇩 印尼', emoji: '🇮🇩' },
+    // NOTE: 中东
+    'TR': { name: '🇹🇷 土耳其', emoji: '🇹🇷' },
+    'AE': { name: '🇦🇪 阿联酋', emoji: '🇦🇪' },
+    'IL': { name: '🇮🇱 以色列', emoji: '🇮🇱' },
+    // NOTE: 其他欧洲
+    'IT': { name: '🇮🇹 意大利', emoji: '🇮🇹' },
+    'ES': { name: '🇪🇸 西班牙', emoji: '🇪🇸' },
+    'SE': { name: '🇸🇪 瑞典', emoji: '🇸🇪' },
+    'CH': { name: '🇨🇭 瑞士', emoji: '🇨🇭' },
+    'PL': { name: '🇵🇱 波兰', emoji: '🇵🇱' },
+    'IE': { name: '🇮🇪 爱尔兰', emoji: '🇮🇪' },
+    'ZA': { name: '🇿🇦 南非', emoji: '🇿🇦' },
     'OTHER': { name: '🌍 其他', emoji: '🌍' },
   };
 }

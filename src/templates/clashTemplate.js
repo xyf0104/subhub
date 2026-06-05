@@ -144,6 +144,19 @@ function nodeToClashProxy(node) {
         ...(node.alpn?.length ? { alpn: node.alpn } : {}),
       };
 
+    // NOTE: Mihomo (Clash Meta) 1.18+ 支持 AnyTLS 协议
+    case 'anytls':
+      return {
+        ...base,
+        type: 'anytls',
+        password: node.password || node.uuid,
+        sni: node.sni || node.server,
+        'skip-cert-verify': node.skipCertVerify || false,
+        udp: true,
+        ...(node.fingerprint ? { 'client-fingerprint': node.fingerprint } : {}),
+        ...(node.alpn?.length ? { alpn: node.alpn } : {}),
+      };
+
     default:
       return null;
   }
@@ -159,8 +172,7 @@ function generateClashConfig(nodes, options = {}) {
   const proxies = nodes.map(nodeToClashProxy).filter(Boolean);
   const nodeNames = proxies.map(p => p.name);
 
-  // NOTE: 只用成功转换为 Clash proxy 的节点来构建地区分组
-  // 不支持的协议（如 anytls）会被 nodeToClashProxy 过滤掉
+  // NOTE: 将所有成功转换的节点加入地区分组
   const validNodeSet = new Set(nodeNames);
   const regionNodes = {};
   for (const node of nodes) {

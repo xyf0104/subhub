@@ -12,6 +12,7 @@ import time
 import uuid
 import secrets
 import string
+import socketserver
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 import os
@@ -25,7 +26,7 @@ SUI_DOMAIN = os.environ.get("SUI_DOMAIN", "your-sui-domain.com")
 def get_all_inbound_ids():
     """从数据库获取所有入站 ID"""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=5)
         rows = conn.execute("SELECT id FROM inbounds").fetchall()
         conn.close()
         return [r[0] for r in rows]
@@ -76,7 +77,7 @@ def get_client_links(name, password, uid):
     domain = SUI_DOMAIN
     links = []
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=5)
         rows = conn.execute("SELECT id, type, tag, out_json, options FROM inbounds").fetchall()
         conn.close()
 
@@ -182,11 +183,22 @@ class BridgeHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        # NOTE: /health 不需要认证，供 watchdog 和监控探测
+        if self.path == "/health":
+            try:
+                conn = sqlite3.connect(DB_PATH, timeout=3)
+                count = conn.execute("SELECT COUNT(*) FROM clients").fetchone()[0]
+                conn.close()
+                self.send_json(200, {"status": "ok", "clients": count})
+            except Exception as e:
+                self.send_json(500, {"status": "error", "error": str(e)})
+            return
+
         if not self.check_auth():
             return
 
         if self.path == "/api/clients":
-            conn = sqlite3.connect(DB_PATH)
+            conn = sqlite3.connect(DB_PATH, timeout=5)
             rows = conn.execute("SELECT id, enable, name, config, volume, expiry, down, up FROM clients").fetchall()
             clients = []
             for r in rows:
@@ -214,7 +226,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
             self.send_json(200, {"success": True, "clients": clients})
 
         elif self.path == "/api/inbounds":
-            conn = sqlite3.connect(DB_PATH)
+            conn = sqlite3.connect(DB_PATH, timeout=5)
             rows = conn.execute("SELECT id, type, tag FROM inbounds").fetchall()
             inbounds = [{"id": r[0], "type": r[1], "tag": r[2]} for r in rows]
             conn.close()
@@ -222,7 +234,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
         elif self.path == "/api/traffic":
             # 返回所有用户流量 + 系统网卡统计
-            conn = sqlite3.connect(DB_PATH)
+            conn = sqlite3.connect(DB_PATH, timeout=5)
             rows = conn.execute(
                 "SELECT name, enable, up, down, total_up, total_down, volume, expiry FROM clients"
             ).fetchall()
@@ -290,7 +302,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
             config = build_client_config(name, password, uid)
             links = get_client_links(name, password, uid)
 
-            conn = sqlite3.connect(DB_PATH)
+            conn = sqlite3.connect(DB_PATH, timeout=5)
             # 检查重名
             existing = conn.execute("SELECT id FROM clients WHERE name=?", (name,)).fetchone()
             if existing:
@@ -341,7 +353,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
         # PUT /api/clients/NAME — 更新用户的入站权限 / 重命名
         if self.path.startswith("/api/clients/"):
             name = unquote(self.path.split("/api/clients/")[1])
-            conn = sqlite3.connect(DB_PATH)
+            conn = sqlite3.connect(DB_PATH, timeout=5)
             client = conn.execute("SELECT id, config, inbounds, links FROM clients WHERE name=?", (name,)).fetchone()
             if not client:
                 conn.close()
@@ -416,8 +428,8 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
         # DELETE /api/clients/NAME
         if self.path.startswith("/api/clients/"):
-            name = self.path.split("/api/clients/")[1]
-            conn = sqlite3.connect(DB_PATH)
+            name = unquote(self.path.split("/api/clients/")[1])
+            conn = sqlite3.connect(DB_PATH, timeout=5)
 
             client = conn.execute("SELECT id, name, config FROM clients WHERE name=?", (name,)).fetchone()
             if not client:
@@ -447,7 +459,17 @@ class BridgeHandler(BaseHTTPRequestHandler):
         print(f"[Bridge] {self.client_address[0]} - {args[0]}")
 
 
+# NOTE: 使用多线程 HTTP 服务器，防止单线程阻塞导致服务卡死
+class ThreadingBridgeServer(socketserver.ThreadingMixIn, HTTPServer):
+    """多线程 HTTP 服务器，每个请求在独立线程中处理"""
+    daemon_threads = True
+    # NOTE: socket 超时 30 秒，防止僵死连接占用线程
+    timeout = 30
+
+
 if __name__ == "__main__":
-    server = HTTPServer(("0.0.0.0", LISTEN_PORT), BridgeHandler)
-    print(f"[Bridge] s-ui 桥接服务启动 → 0.0.0.0:{LISTEN_PORT}")
+    server = ThreadingBridgeServer(("0.0.0.0", LISTEN_PORT), BridgeHandler)
+    # NOTE: 设置 socket 级别超时，防止慢客户端阻塞
+    server.socket.settimeout(30)
+    print(f"[Bridge] s-ui 桥接服务启动 → 0.0.0.0:{LISTEN_PORT} (多线程模式)")
     server.serve_forever()

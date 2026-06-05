@@ -68,25 +68,88 @@ function createBaseNode() {
 
 function detectRegion(name, server) {
   const text = (name + ' ' + server).toLowerCase();
+  // NOTE: 按匹配优先级排列，长关键词优先避免误匹配（如 'in' 不会匹配到其他词）
   const regionMap = {
-    'HK': ['hk', 'hong', 'hongkong', '香港', '港'],
-    'JP': ['jp', 'japan', 'tokyo', '日本', '东京', '大阪'],
-    'SG': ['sg', 'singapore', '新加坡', '狮城'],
-    'US': ['us', 'usa', 'united', 'america', '美国', '美', 'los', 'san', 'new york', 'seattle'],
-    'TW': ['tw', 'taiwan', '台湾', '台'],
-    'KR': ['kr', 'korea', '韩国', '首尔'],
-    'UK': ['uk', 'london', '英国'],
-    'DE': ['de', 'germany', 'frankfurt', '德国'],
-    'AU': ['au', 'australia', '澳大利亚'],
-    'IN': ['in', 'india', 'mumbai', '印度'],
-    'CA': ['ca', 'canada', '加拿大'],
-    'FR': ['fr', 'france', 'paris', '法国'],
-    'NL': ['nl', 'netherlands', '荷兰'],
-    'RU': ['ru', 'russia', '俄罗斯'],
+    'HK': ['hongkong', 'hong kong', '香港', 'hk', '港'],
+    'JP': ['japan', 'tokyo', '日本', '东京', '大阪', 'jp', 'osaka'],
+    'SG': ['singapore', '新加坡', '狮城', 'sg'],
+    'US': ['united states', 'america', '美国', 'los angeles', 'san jose', 'new york', 'seattle', 'dallas', 'chicago', 'miami', 'silicon', 'virginia', 'usa', 'us'],
+    'TW': ['taiwan', '台湾', '台北', 'tw'],
+    'KR': ['korea', '韩国', '首尔', 'seoul', 'kr'],
+    'UK': ['united kingdom', 'london', '英国', 'uk', 'gb', '伦敦'],
+    'DE': ['germany', 'frankfurt', '德国', 'de', '法兰克福'],
+    'AU': ['australia', '澳大利亚', '澳洲', 'sydney', 'au', '悉尼'],
+    'IN': ['india', 'mumbai', '印度', 'bangalore', 'chennai'],
+    'CA': ['canada', '加拿大', 'toronto', 'vancouver', 'montreal'],
+    'FR': ['france', 'paris', '法国', 'fr', '巴黎'],
+    'NL': ['netherlands', '荷兰', 'amsterdam', 'nl', '阿姆斯特丹'],
+    'RU': ['russia', '俄罗斯', 'moscow', 'ru', '莫斯科'],
+    // NOTE: 南美洲
+    'AR': ['argentina', '阿根廷', 'buenos aires'],
+    'BR': ['brazil', '巴西', 'sao paulo', 'br'],
+    'CL': ['chile', '智利'],
+    'CO': ['colombia', '哥伦比亚'],
+    'UY': ['uruguay', '乌拉圭'],
+    'PE': ['peru', '秘鲁'],
+    'MX': ['mexico', '墨西哥'],
+    'EC': ['ecuador', '厄瓜多尔'],
+    // NOTE: 东南亚
+    'TH': ['thailand', '泰国', 'bangkok', '曼谷'],
+    'VN': ['vietnam', '越南', 'ho chi minh'],
+    'PH': ['philippines', '菲律宾', 'manila'],
+    'MY': ['malaysia', '马来西亚', 'kuala lumpur'],
+    'ID': ['indonesia', '印尼', '印度尼西亚', 'jakarta'],
+    // NOTE: 中东/非洲
+    'TR': ['turkey', '土耳其', 'istanbul', 'türkiye', 'turkiye'],
+    'AE': ['emirates', '阿联酋', 'dubai', '迪拜'],
+    'IL': ['israel', '以色列'],
+    'ZA': ['south africa', '南非', 'johannesburg'],
+    // NOTE: 欧洲其他
+    'IT': ['italy', '意大利', 'milan', 'rome'],
+    'ES': ['spain', '西班牙', 'madrid'],
+    'SE': ['sweden', '瑞典', 'stockholm'],
+    'CH': ['switzerland', '瑞士', 'zurich'],
+    'PL': ['poland', '波兰', 'warsaw'],
+    'IE': ['ireland', '爱尔兰', 'dublin'],
+    'PT': ['portugal', '葡萄牙', 'lisbon'],
+    'FI': ['finland', '芬兰', 'helsinki'],
+    'NO': ['norway', '挪威', 'oslo'],
+    'DK': ['denmark', '丹麦'],
+    'AT': ['austria', '奥地利', 'vienna'],
+    'BE': ['belgium', '比利时', 'brussels'],
+    'CZ': ['czech', '捷克', 'prague'],
+    'RO': ['romania', '罗马尼亚'],
+    'HU': ['hungary', '匈牙利', 'budapest'],
+    'BG': ['bulgaria', '保加利亚'],
+    'LU': ['luxembourg', '卢森堡'],
+    // NOTE: 其他亚洲
+    'KZ': ['kazakhstan', '哈萨克斯坦'],
+    'PK': ['pakistan', '巴基斯坦'],
+    'BD': ['bangladesh', '孟加拉'],
   };
+
+  // NOTE: 先检测 emoji 国旗（最可靠），格式为两个 regional indicator symbols
+  const flagMatch = name.match(/[\uD83C][\uDDE6-\uDDFF][\uD83C][\uDDE6-\uDDFF]/);
+  if (flagMatch) {
+    const flag = flagMatch[0];
+    const c1 = flag.codePointAt(0) - 0x1F1E6 + 65;
+    const c2 = flag.codePointAt(2) - 0x1F1E6 + 65;
+    const code = String.fromCharCode(c1) + String.fromCharCode(c2);
+    // 验证是否是已知地区码
+    if (regionMap[code]) return code;
+    // 未知但有效的国旗码也返回
+    return code;
+  }
+
   for (const [code, keywords] of Object.entries(regionMap)) {
     for (const kw of keywords) {
-      if (text.includes(kw)) return code;
+      // NOTE: 对两字符的关键词使用词边界匹配，避免 'in' 匹配到 'china' 等
+      if (kw.length <= 2) {
+        const regex = new RegExp(`(?:^|[^a-z])${kw}(?:$|[^a-z])`);
+        if (regex.test(text)) return code;
+      } else {
+        if (text.includes(kw)) return code;
+      }
     }
   }
   return 'OTHER';
@@ -151,7 +214,10 @@ function parseHysteria2(uri) {
 }
 
 /**
- * Parse a VLESS URI: vless://uuid@host:port?params#name
+ * Parse a VLESS URI，支持两种格式：
+ * 1. 标准格式: vless://uuid@host:port?params#name
+ * 2. Shadowrocket 格式: vless://base64(auto:uuid@host:port)?remark=xxx&xtls=2&sni=xxx
+ * NOTE: 飞兔云等机场使用 Shadowrocket 格式，需先检测 Base64 编码并解码
  */
 function parseVLESS(uri) {
   const node = createBaseNode();
@@ -160,6 +226,7 @@ function parseVLESS(uri) {
 
   let rest = uri.replace(/^vless:\/\//, '');
 
+  // NOTE: 先提取查询参数（两种格式共用）
   const hashIdx = rest.lastIndexOf('#');
   if (hashIdx !== -1) {
     node.name = decodeURIComponent(rest.substring(hashIdx + 1));
@@ -172,6 +239,28 @@ function parseVLESS(uri) {
     const qs = rest.substring(qIdx + 1);
     params = Object.fromEntries(new URLSearchParams(qs));
     rest = rest.substring(0, qIdx);
+  }
+
+  // NOTE: 检测 Shadowrocket Base64 格式 — 特征是 rest 部分是有效 Base64 且不含 @
+  // 标准格式的 rest 一定含 @（uuid@host:port），而 Shadowrocket 格式 rest 是纯 Base64
+  let isShadowrocket = false;
+  if (!rest.includes('@') || (rest.match(/^[A-Za-z0-9+/=]+$/) && rest.length > 20)) {
+    try {
+      const decoded = Buffer.from(rest, 'base64').toString();
+      // Shadowrocket 解码后格式: auto:uuid@host:port 或 uuid@host:port
+      if (decoded.includes('@') && decoded.includes(':')) {
+        isShadowrocket = true;
+        rest = decoded;
+      }
+    } catch {
+      // 不是 Base64，走标准解析
+    }
+  }
+
+  // 解析 uuid@host:port（可能带 auto: 前缀）
+  if (isShadowrocket) {
+    // 去掉 "auto:" 前缀
+    rest = rest.replace(/^auto:/, '');
   }
 
   const atIdx = rest.lastIndexOf('@');
@@ -187,31 +276,48 @@ function parseVLESS(uri) {
     }
   }
 
+  // NOTE: Shadowrocket 格式用 remark 做节点名称
+  if (params.remark && !node.name) {
+    node.name = decodeURIComponent(params.remark);
+  }
+
   // Transport
   node.network = params.type || 'tcp';
   if (params.path) node.wsPath = decodeURIComponent(params.path);
   if (params.host) node.wsHost = decodeURIComponent(params.host);
   if (params.serviceName) node.grpcServiceName = params.serviceName;
 
-  // Security
+  // Security — 支持标准格式和 Shadowrocket 的 xtls 参数
   const security = params.security || '';
-  if (security === 'tls') {
+  // NOTE: Shadowrocket 用 xtls=2 表示 Reality，xtls=1 表示 XTLS
+  const xtls = params.xtls || '';
+
+  if (security === 'tls' || (params.tls === '1' && !xtls)) {
     node.tls = true;
     node.sni = params.sni || node.server;
     if (params.fp) node.fingerprint = params.fp;
     if (params.alpn) node.alpn = params.alpn.split(',');
-  } else if (security === 'reality') {
+  } else if (security === 'reality' || xtls === '2') {
+    // NOTE: xtls=2 是 Shadowrocket 表示 Reality 的方式
     node.tls = true;
     node.sni = params.sni || '';
     node.fingerprint = params.fp || 'chrome';
     node.realityPublicKey = params.pbk || '';
     node.realityShortId = params.sid || '';
+    if (!node.flow) node.flow = 'xtls-rprx-vision';
+  } else if (xtls === '1') {
+    node.tls = true;
+    node.sni = params.sni || node.server;
+    node.flow = 'xtls-rprx-vision';
+  } else if (params.tls === '1') {
+    node.tls = true;
+    node.sni = params.sni || node.server;
   } else {
     node.tls = false;
   }
 
   if (params.flow) node.flow = params.flow;
-  node.skipCertVerify = params.allowInsecure === '1';
+  node.skipCertVerify = params.allowInsecure === '1' || params.insecure === '1';
 
   if (!node.name) node.name = `VLESS-${node.server}`;
   node.region = detectRegion(node.name, node.server);
@@ -551,7 +657,23 @@ function parseMultipleURIs(text) {
 /**
  * Convert internal node to share URI
  */
+/**
+ * 格式化主机地址用于 URI 构建
+ * NOTE: IPv6 地址必须用方括号包裹，否则冒号会被误解析为端口分隔符
+ * @param {string} host - 域名或 IP 地址
+ * @returns {string} 格式化后的主机地址
+ */
+function formatHost(host) {
+  if (!host) return host;
+  // 已经有方括号的不重复添加
+  if (host.startsWith('[')) return host;
+  // 包含冒号说明是 IPv6 地址
+  if (host.includes(':')) return `[${host}]`;
+  return host;
+}
+
 function nodeToURI(node) {
+  const host = formatHost(node.server);
   switch (node.type) {
     case 'hysteria2': {
       const params = new URLSearchParams();
@@ -568,7 +690,7 @@ function nodeToURI(node) {
       if (node.alpn?.length) params.set('alpn', node.alpn.join(','));
       const qs = params.toString();
       // NOTE: 使用标准 hysteria2:// 而非 hy2://，兼容 Passwall 等路由器客户端
-      return `hysteria2://${encodeURIComponent(node.password)}@${node.server}:${node.port}${qs ? '?' + qs : ''}#${encodeURIComponent(node.name)}`;
+      return `hysteria2://${encodeURIComponent(node.password)}@${host}:${node.port}${qs ? '?' + qs : ''}#${encodeURIComponent(node.name)}`;
     }
     case 'vless': {
       const params = new URLSearchParams();
@@ -593,7 +715,7 @@ function nodeToURI(node) {
         if (node.grpcServiceName) params.set('serviceName', node.grpcServiceName);
       }
       const qs = params.toString();
-      return `vless://${node.uuid}@${node.server}:${node.port}?${qs}#${encodeURIComponent(node.name)}`;
+      return `vless://${node.uuid}@${host}:${node.port}?${qs}#${encodeURIComponent(node.name)}`;
     }
     case 'vmess': {
       const json = {
@@ -615,11 +737,11 @@ function nodeToURI(node) {
         if (node.wsHost) params.set('host', node.wsHost);
       }
       const qs = params.toString();
-      return `trojan://${encodeURIComponent(node.password)}@${node.server}:${node.port}?${qs}#${encodeURIComponent(node.name)}`;
+      return `trojan://${encodeURIComponent(node.password)}@${host}:${node.port}?${qs}#${encodeURIComponent(node.name)}`;
     }
     case 'ss': {
       const userInfo = Buffer.from(`${node.cipher}:${node.password}`).toString('base64');
-      return `ss://${userInfo}@${node.server}:${node.port}#${encodeURIComponent(node.name)}`;
+      return `ss://${userInfo}@${host}:${node.port}#${encodeURIComponent(node.name)}`;
     }
     case 'tuic': {
       const params = new URLSearchParams();
@@ -628,7 +750,7 @@ function nodeToURI(node) {
       if (node.alpn?.length) params.set('alpn', node.alpn.join(','));
       if (node.udpRelayMode) params.set('udp_relay_mode', node.udpRelayMode);
       const qs = params.toString();
-      return `tuic://${node.uuid}:${node.password}@${node.server}:${node.port}?${qs}#${encodeURIComponent(node.name)}`;
+      return `tuic://${node.uuid}:${node.password}@${host}:${node.port}?${qs}#${encodeURIComponent(node.name)}`;
     }
     case 'anytls': {
       const params = new URLSearchParams();
@@ -637,7 +759,7 @@ function nodeToURI(node) {
       if (node.alpn?.length) params.set('alpn', node.alpn.join(','));
       if (node.fingerprint) params.set('fp', node.fingerprint);
       const qs = params.toString();
-      return `anytls://${encodeURIComponent(node.password)}@${node.server}:${node.port}${qs ? '?' + qs : ''}#${encodeURIComponent(node.name)}`;
+      return `anytls://${encodeURIComponent(node.password)}@${host}:${node.port}${qs ? '?' + qs : ''}#${encodeURIComponent(node.name)}`;
     }
     default:
       return null;

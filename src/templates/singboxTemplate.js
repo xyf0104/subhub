@@ -159,6 +159,20 @@ function nodeToSingboxOutbound(node) {
         },
       };
 
+    // NOTE: Sing-box 1.11+ 支持 AnyTLS 协议
+    case 'anytls':
+      return {
+        type: 'anytls',
+        ...base,
+        password: node.password || node.uuid,
+        tls: {
+          enabled: true,
+          server_name: node.sni || node.server,
+          insecure: node.skipCertVerify || false,
+          ...(node.alpn?.length ? { alpn: node.alpn } : {}),
+        },
+      };
+
     default:
       return null;
   }

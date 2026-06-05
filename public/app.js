@@ -68,7 +68,7 @@ function navigate(page) {
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById('page-' + page)?.classList.add('active');
   document.querySelector(`.nav-item[data-page="${page}"]`)?.classList.add('active');
-  const titles = { dashboard:'仪表盘', nodes:'节点管理', subscriptions:'订阅源管理', shares:'分享管理', settings:'设置' };
+  const titles = { dashboard:'仪表盘', nodes:'节点管理', subscriptions:'订阅源管理', shares:'分享管理', bridges:'Bridge 管理', settings:'设置' };
   document.getElementById('pageTitle').textContent = titles[page] || page;
 
   const ha = document.getElementById('headerActions');
@@ -84,12 +84,15 @@ function navigate(page) {
       <button class="btn btn-primary btn-sm" onclick="openAddSub()">+ 添加订阅</button>`;
   } else if (page === 'shares') {
     ha.innerHTML = `<button class="btn btn-primary btn-sm" onclick="openCreateShare()">+ 创建分享</button>`;
+  } else if (page === 'bridges') {
+    ha.innerHTML = `<button class="btn btn-primary btn-sm" onclick="openAddBridge()">+ 添加 Bridge</button>`;
   }
 
   if (page === 'dashboard') loadDashboard();
   else if (page === 'nodes') loadNodes();
   else if (page === 'subscriptions') loadSubscriptions();
   else if (page === 'shares') loadShares();
+  else if (page === 'bridges') loadBridges();
   else if (page === 'settings') loadSettings();
   document.querySelector('.sidebar')?.classList.remove('open');
 }
@@ -1199,16 +1202,15 @@ let _currentSuiOverrides = {};
 
 async function openEditShare(shareId) {
   try {
-    // NOTE: 每次编辑都重新加载 s-ui 入站，确保同步
-    const [sharesData] = await Promise.all([api('/shares'), loadSuiInbounds()]);
-    if (!_editShareNodes.length) {
-      const nodesData = await api('/nodes');
-      _editShareNodes = nodesData.nodes;
-    }
-    if (!_allSubs.length) {
-      const subsData = await api('/subscriptions');
-      _allSubs = subsData.subscriptions || [];
-    }
+    // NOTE: 每次编辑都重新加载节点和订阅，确保显示最新数据
+    const [sharesData, nodesData, subsData] = await Promise.all([
+      api('/shares'),
+      api('/nodes'),
+      api('/subscriptions'),
+      loadSuiInbounds(),
+    ]);
+    _editShareNodes = nodesData.nodes;
+    _allSubs = subsData.subscriptions || [];
     const share = sharesData.shares.find(s => s.id === shareId);
     if (!share) return toast('分享不存在', 'error');
 
@@ -1572,6 +1574,168 @@ function closeModal(id) { document.getElementById(id).classList.remove('active')
 function copyText(t) { navigator.clipboard.writeText(t).then(()=>toast('已复制','success'),()=>{ const a=document.createElement('textarea'); a.value=t; document.body.appendChild(a); a.select(); document.execCommand('copy'); a.remove(); toast('已复制','success'); }); }
 function esc(s) { const d=document.createElement('div'); d.textContent=s||''; return d.innerHTML; }
 function toggleMobileMenu() { document.querySelector('.sidebar').classList.toggle('open'); }
+
+// ==================== Bridge 管理 ====================
+
+/**
+ * 加载并展示 Bridge 列表
+ * NOTE: 每次加载会并行测试所有 bridge 状态
+ */
+async function loadBridges() {
+  const el = document.getElementById('bridges-content');
+  el.innerHTML = '<div class="empty-state"><div class="icon" style="animation:pulse 1.5s infinite">⏳</div><p>加载中...</p></div>';
+  try {
+    const { bridges } = await api('/bridges');
+    if (bridges.length === 0) {
+      el.innerHTML = `
+        <div class="empty-state">
+          <div class="icon">🔗</div>
+          <h3>暂无 Bridge</h3>
+          <p>Bridge 用于连接自建节点服务器的 S-UI，实现按用户精确追踪流量</p>
+          <button class="btn btn-primary" onclick="openAddBridge()">+ 添加 Bridge</button>
+        </div>`;
+      return;
+    }
+
+    let html = `
+      <div class="info-card" style="margin-bottom:16px;padding:12px 16px;border-radius:10px;">
+        <p style="margin:0;opacity:0.7;">💡 Bridge 连接自建服务器的 S-UI，在编辑分享时勾选入站即可按用户追踪流量。新服务器需先运行一键部署脚本。</p>
+      </div>
+      <div class="table-wrapper"><table class="data-table">
+      <thead><tr>
+        <th>状态</th><th>区域</th><th>显示名</th><th>地址</th><th>延迟</th><th>客户端</th><th>操作</th>
+      </tr></thead><tbody>`;
+
+    for (const b of bridges) {
+      const statusDot = b.status === 'online'
+        ? '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#22c55e;box-shadow:0 0 6px #22c55e;"></span>'
+        : '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#ef4444;box-shadow:0 0 6px #ef4444;"></span>';
+      const latencyText = b.status === 'online' ? `${b.latency}ms` : '-';
+      html += `<tr>
+        <td>${statusDot}</td>
+        <td><strong>${esc(b.region)}</strong></td>
+        <td>${esc(b.label)}</td>
+        <td><code>${esc(b.hostname)}:${b.port}</code></td>
+        <td>${latencyText}</td>
+        <td>${b.clients}</td>
+        <td>
+          <button class="btn btn-sm btn-secondary" onclick="testBridge('${b.id}')">🔍 测试</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteBridge('${b.id}','${esc(b.label)}')">🗑</button>
+        </td>
+      </tr>`;
+    }
+    html += '</tbody></table></div>';
+    el.innerHTML = html;
+  } catch (e) { el.innerHTML = `<div class="empty-state"><p>加载失败: ${esc(e.message)}</p></div>`; }
+}
+
+/** 打开添加 Bridge 弹窗 */
+function openAddBridge() {
+  // 动态创建弹窗
+  let modal = document.getElementById('bridgeModal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'bridgeModal';
+    modal.className = 'modal-overlay';
+    modal.innerHTML = `
+      <div class="modal" style="max-width:500px;">
+        <div class="modal-header">
+          <h3>添加 Bridge</h3>
+          <button class="modal-close" onclick="closeModal('bridgeModal')">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="info-card" style="margin-bottom:16px;padding:12px;border-radius:8px;">
+            <p style="margin:0;font-size:0.85em;opacity:0.8;">📌 请先在目标服务器运行一键部署脚本：</p>
+            <code style="display:block;margin-top:6px;padding:8px;border-radius:6px;font-size:0.8em;word-break:break-all;cursor:pointer;" onclick="copyText(this.textContent)">bash <(curl -sL https://gitee.com/ranxiaoer/subhub/raw/main/sui-bridge/install_bridge.sh)</code>
+          </div>
+          <form id="bridgeForm" onsubmit="submitBridge(event)">
+            <div class="form-group">
+              <label>区域标识 *</label>
+              <input class="form-input" id="bridgeRegion" placeholder="如: sg / hk / kr (英文小写)" required>
+            </div>
+            <div class="form-group">
+              <label>显示名称 *</label>
+              <input class="form-input" id="bridgeLabel" placeholder="如: 新加坡 / 香港 / 韩国" required>
+            </div>
+            <div class="form-group">
+              <label>服务器地址 *</label>
+              <input class="form-input" id="bridgeHost" placeholder="IP 或域名，如: 1.2.3.4" required>
+            </div>
+            <div class="form-group">
+              <label>端口</label>
+              <input class="form-input" id="bridgePort" type="number" value="9876" placeholder="默认 9876">
+            </div>
+            <div class="form-group">
+              <label>通信密钥 *</label>
+              <input class="form-input" id="bridgeToken" placeholder="部署脚本输出的 Bridge 密钥" required>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" onclick="closeModal('bridgeModal')">取消</button>
+              <button type="submit" class="btn btn-primary" id="bridgeSubmitBtn">添加并测试连接</button>
+            </div>
+          </form>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+  }
+  // 清空表单
+  document.getElementById('bridgeRegion').value = '';
+  document.getElementById('bridgeLabel').value = '';
+  document.getElementById('bridgeHost').value = '';
+  document.getElementById('bridgePort').value = '9876';
+  document.getElementById('bridgeToken').value = '';
+  modal.classList.add('active');
+}
+
+/** 提交添加 Bridge */
+async function submitBridge(e) {
+  e.preventDefault();
+  const btn = document.getElementById('bridgeSubmitBtn');
+  btn.disabled = true;
+  btn.textContent = '连接测试中...';
+  try {
+    const data = {
+      region: document.getElementById('bridgeRegion').value.trim().toLowerCase(),
+      label: document.getElementById('bridgeLabel').value.trim(),
+      hostname: document.getElementById('bridgeHost').value.trim(),
+      port: parseInt(document.getElementById('bridgePort').value) || 9876,
+      token: document.getElementById('bridgeToken').value.trim(),
+    };
+    const result = await api('/bridges', { method: 'POST', body: JSON.stringify(data) });
+    toast(`Bridge "${data.label}" 添加成功 (${result.test.latency}ms)`, 'success');
+    closeModal('bridgeModal');
+    loadBridges();
+  } catch (err) {
+    toast(err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '添加并测试连接';
+  }
+}
+
+/** 测试 Bridge 连接 */
+async function testBridge(bridgeId) {
+  toast('测试连接中...', 'info');
+  try {
+    const result = await api(`/bridges/${bridgeId}/test`, { method: 'POST' });
+    if (result.success) {
+      toast(`连接正常 | 延迟: ${result.latency}ms | 客户端: ${result.clients}`, 'success');
+    } else {
+      toast(`连接失败: ${result.error}`, 'error');
+    }
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+/** 删除 Bridge */
+async function deleteBridge(bridgeId, label) {
+  if (!confirm(`确定删除 Bridge "${label}"？\n\n注意：删除后该区域的自建节点将无法在分享中使用。`)) return;
+  try {
+    await api(`/bridges/${bridgeId}`, { method: 'DELETE' });
+    toast(`Bridge "${label}" 已删除`, 'success');
+    loadBridges();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
 
 // ---- 日夜模式 ----
 function initTheme() {

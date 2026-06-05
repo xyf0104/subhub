@@ -35,16 +35,22 @@ function getCachedOrFetch(cacheKey, fetcher) {
 }
 
 /**
- * 解析多 bridge 配置（从 SUI_BRIDGES 环境变量）
- * NOTE: 每个 bridge 对应一个区域的 s-ui 服务器
+ * 解析多 bridge 配置
+ * NOTE: 优先从 bridges.json 读取，环境变量作为 fallback
  */
 function getAllBridges() {
+  // NOTE: 使用 api.js 中的 loadBridges，统一管理 bridge 配置来源
+  try {
+    const apiRouter = require('./api');
+    if (apiRouter.loadBridges) {
+      const bridges = apiRouter.loadBridges();
+      if (bridges.length > 0) return bridges;
+    }
+  } catch {}
+  // fallback: 环境变量
   let bridges = [];
   if (process.env.SUI_BRIDGES) {
     try { bridges = JSON.parse(process.env.SUI_BRIDGES); } catch {}
-  }
-  if (bridges.length === 0) {
-    bridges = [{ region: 'jp', label: '日本', hostname: '103.200.97.23', port: 9876, token: SUI_BRIDGE_TOKEN }];
   }
   return bridges;
 }
@@ -57,25 +63,65 @@ function getBridgeConfig(region) {
 }
 
 /**
+ * Bridge 熔断器
+ * NOTE: 当 bridge 连续失败后暂停请求，避免超时拖慢所有操作
+ * 连续 3 次失败 → 熔断 30 秒 → 自动恢复探测
+ */
+const CIRCUIT_BREAKER = new Map();
+const CB_THRESHOLD = 3;
+const CB_RECOVERY_MS = 30_000;
+
+function getCircuitState(region) {
+  const state = CIRCUIT_BREAKER.get(region);
+  if (!state) return { open: false };
+  if (state.failures >= CB_THRESHOLD) {
+    // 检查是否过了恢复期
+    if (Date.now() - state.lastFailure < CB_RECOVERY_MS) {
+      return { open: true };
+    }
+    // 恢复期到了，半开状态：允许一次探测
+    return { open: false, halfOpen: true };
+  }
+  return { open: false };
+}
+
+function recordSuccess(region) {
+  CIRCUIT_BREAKER.delete(region);
+}
+
+function recordFailure(region) {
+  const state = CIRCUIT_BREAKER.get(region) || { failures: 0, lastFailure: 0 };
+  state.failures += 1;
+  state.lastFailure = Date.now();
+  CIRCUIT_BREAKER.set(region, state);
+}
+
+/**
  * 向指定区域的 s-ui bridge 发送请求
  */
 function suiBridgeRequest(region, method, path, body = null) {
   const bridge = getBridgeConfig(region);
   if (!bridge) return Promise.reject(new Error(`未找到区域 ${region} 的 bridge 配置`));
 
+  // NOTE: 熔断检查 — bridge 不可用时直接返回，不等超时
+  const cbState = getCircuitState(region);
+  if (cbState.open) {
+    return Promise.reject(new Error(`${region} bridge 暂时不可用（熔断中，${Math.ceil((CB_RECOVERY_MS - (Date.now() - CIRCUIT_BREAKER.get(region).lastFailure)) / 1000)}秒后重试）`));
+  }
+
   // NOTE: GET 请求使用缓存，写操作清空缓存确保数据一致
   if (method === 'GET' && !body) {
     const cacheKey = `bridge_${region}_${path}`;
-    return getCachedOrFetch(cacheKey, () => _rawBridgeRequest(bridge, method, path, null));
+    return getCachedOrFetch(cacheKey, () => _rawBridgeRequest(bridge, method, path, null, region));
   }
   // 写操作清空该区域缓存
   for (const key of BRIDGE_CACHE.keys()) {
     if (key.includes(region)) BRIDGE_CACHE.delete(key);
   }
-  return _rawBridgeRequest(bridge, method, path, body);
+  return _rawBridgeRequest(bridge, method, path, body, region);
 }
 
-function _rawBridgeRequest(bridge, method, path, body) {
+function _rawBridgeRequest(bridge, method, path, body, region) {
   return new Promise((resolve, reject) => {
     const bodyStr = body ? JSON.stringify(body) : '';
     const opts = {
@@ -88,18 +134,32 @@ function _rawBridgeRequest(bridge, method, path, body) {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(bodyStr),
       },
-      timeout: 10000,
+      // NOTE: 从 10 秒缩短到 5 秒，配合熔断机制快速失败
+      timeout: 5000,
     };
     const req = http.request(opts, (res) => {
       let data = '';
       res.on('data', c => data += c);
       res.on('end', () => {
-        try { resolve(JSON.parse(data)); }
-        catch { resolve({ success: false, error: data }); }
+        try {
+          const result = JSON.parse(data);
+          recordSuccess(region);
+          resolve(result);
+        } catch {
+          recordSuccess(region);
+          resolve({ success: false, error: data });
+        }
       });
     });
-    req.on('error', e => reject(e));
-    req.on('timeout', () => { req.destroy(); reject(new Error('桥接服务超时')); });
+    req.on('error', e => {
+      recordFailure(region);
+      reject(e);
+    });
+    req.on('timeout', () => {
+      req.destroy();
+      recordFailure(region);
+      reject(new Error(`${region} bridge 超时`));
+    });
     if (bodyStr) req.write(bodyStr);
     req.end();
   });
@@ -391,8 +451,9 @@ router.put('/:id', requireAuth, async (req, res) => {
       if (!oldInfo.clientName) continue;
       const newConfig = newBridges[region];
 
-      // 如果新数据中该区域入站为空 → 删除用户
-      if (newConfig && (newConfig.inboundIds || []).length === 0) {
+      // NOTE: 如果新数据中该区域不存在或入站为空 → 用户取消了全部勾选 → 删除 s-ui 用户
+      const newInboundIds = newConfig?.inboundIds || [];
+      if (!newConfig || newInboundIds.length === 0) {
         console.log(`[Share] 编辑时移除 ${region} s-ui 用户:`, oldInfo.clientName);
         try {
           await suiBridgeRequest(region, 'DELETE', `/api/clients/${encodeURIComponent(oldInfo.clientName)}`);
@@ -656,15 +717,48 @@ module.exports.shareSubscribeHandler = async (req, res) => {
       title: share.title,
     });
 
-    // 设置 Subscription-Userinfo 响应头
-    const userinfo = [];
-    userinfo.push(`upload=0`);
-    userinfo.push(`download=${share.trafficUsed || 0}`);
-    userinfo.push(`total=${share.trafficLimit || 0}`);
-    if (share.expireAt) {
-      userinfo.push(`expire=${Math.floor(new Date(share.expireAt).getTime() / 1000)}`);
+    // NOTE: 汇总流量信息 — 合并订阅源 userinfo + S-UI bridge 流量
+    let totalUpload = 0;
+    let totalDownload = 0;
+    let totalQuota = share.trafficLimit || 0;
+    let latestExpire = share.expireAt ? Math.floor(new Date(share.expireAt).getTime() / 1000) : 0;
+
+    // 1. 从 S-UI bridge 获取的流量（已在 GET /shares 时合并到 trafficUsed）
+    totalDownload += (share.trafficUsed || 0);
+
+    // 2. 从订阅源获取的流量信息
+    const allSubs = nodeManager.getAllSubscriptions ? nodeManager.getAllSubscriptions() : [];
+    const shareNodeIds = new Set(share.nodeIds || []);
+    // NOTE: allNodes 已在上方声明（第 620 行），直接复用
+    // 找出分享中包含的订阅源
+    const usedSubIds = new Set();
+    for (const nodeId of shareNodeIds) {
+      const node = allNodes.find(n => n.id === nodeId);
+      if (node?.group?.startsWith('sub-')) {
+        usedSubIds.add(node.group.replace('sub-', ''));
+      }
     }
-    res.setHeader('Subscription-Userinfo', userinfo.join('; '));
+    // 汇总订阅源的流量数据
+    for (const sub of allSubs) {
+      if (!usedSubIds.has(sub.id)) continue;
+      const info = sub.userinfo;
+      if (!info) continue;
+      totalUpload += (info.upload || 0);
+      totalDownload += (info.download || 0);
+      // 取所有订阅源中最大的 total 作为总限额
+      if (info.total && info.total > totalQuota) totalQuota = info.total;
+      // 取最近的到期时间
+      if (info.expire && info.expire > latestExpire) latestExpire = info.expire;
+    }
+
+    const userinfoHeader = [];
+    userinfoHeader.push(`upload=${totalUpload}`);
+    userinfoHeader.push(`download=${totalDownload}`);
+    userinfoHeader.push(`total=${totalQuota}`);
+    if (latestExpire > 0) {
+      userinfoHeader.push(`expire=${latestExpire}`);
+    }
+    res.setHeader('Subscription-Userinfo', userinfoHeader.join('; '));
     // NOTE: 'base64:xxx' 前缀格式是 Shadowrocket/V2RayN 识别订阅名称的标准格式
     res.setHeader('Profile-Title', 'base64:' + Buffer.from(share.title).toString('base64'));
     // NOTE: Content-Disposition 使用 generate 返回的 filename，不再硬编码 .yaml

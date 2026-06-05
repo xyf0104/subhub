@@ -20,23 +20,31 @@ const insecureAgent = new https.Agent({ rejectUnauthorized: false });
  */
 async function fetchAndParse(subId, url, name, fetchMode) {
   let text;
+  // NOTE: 提取原始订阅源的流量信息，用于客户端展示用量
+  let userinfo = null;
 
   if (fetchMode === 'china') {
     // 用户明确选择国内中转
     console.log(`[Sub] 使用国内中转拉取: ${url}`);
     try {
-      text = await chinaProxyFetch(url);
+      const result = await chinaProxyFetch(url);
+      text = result.text;
+      userinfo = result.userinfo;
     } catch (err) {
       throw new Error(`国内中转拉取失败: ${err.message}`);
     }
   } else {
     // 直连，失败时自动 fallback 到国内中转
     try {
-      text = await directFetch(url);
+      const result = await directFetch(url);
+      text = result.text;
+      userinfo = result.userinfo;
     } catch (directErr) {
       console.log(`[Sub] 直连失败 (${directErr.message})，尝试大陆中转: ${url}`);
       try {
-        text = await chinaProxyFetch(url);
+        const result = await chinaProxyFetch(url);
+        text = result.text;
+        userinfo = result.userinfo;
       } catch (proxyErr) {
         throw new Error(`直连失败: ${directErr.message}; 中转也失败: ${proxyErr.message}`);
       }
@@ -46,16 +54,36 @@ async function fetchAndParse(subId, url, name, fetchMode) {
   // 解析订阅内容
   const nodes = parseMultipleURIs(text);
   if (nodes.length > 0) {
-    return await storeNodes(subId, name, nodes);
+    return await storeNodes(subId, name, nodes, userinfo);
   }
 
   // 尝试 Clash YAML 格式
   const yamlNodes = parseClashYAML(text);
   if (yamlNodes.length > 0) {
-    return await storeNodes(subId, name, yamlNodes);
+    return await storeNodes(subId, name, yamlNodes, userinfo);
   }
 
   throw new Error('No valid nodes found in subscription');
+}
+
+/**
+ * 解析 Subscription-Userinfo 响应头
+ * NOTE: 格式为 upload=xxx; download=xxx; total=xxx; expire=xxx
+ * @param {string|null} header - 响应头原始值
+ * @returns {Object|null} 解析后的流量信息
+ */
+function parseSubscriptionUserinfo(header) {
+  if (!header) return null;
+  const info = {};
+  for (const part of header.split(';')) {
+    const [key, val] = part.trim().split('=');
+    if (key && val) {
+      info[key.trim()] = parseInt(val.trim(), 10) || 0;
+    }
+  }
+  // 至少包含 total 或 download 才算有效
+  if (info.total || info.download) return info;
+  return null;
 }
 
 /**
@@ -78,6 +106,9 @@ async function directFetch(url) {
     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
   }
 
+  // NOTE: 提取 Subscription-Userinfo 响应头（流量信息）
+  const userinfo = parseSubscriptionUserinfo(response.headers.get('subscription-userinfo'));
+
   const text = await response.text();
   // 检查是否为错误响应（飞兔云等返回 JSON 错误）
   if (text.startsWith('{') && text.includes('"fail"')) {
@@ -90,7 +121,7 @@ async function directFetch(url) {
       if (e.message !== 'Unexpected token' && !e.message.includes('JSON')) throw e;
     }
   }
-  return text;
+  return { text, userinfo };
 }
 
 /**
@@ -126,7 +157,9 @@ async function chinaProxyFetch(url) {
         try {
           const json = JSON.parse(data);
           if (json.success && json.content) {
-            resolve(json.content);
+            // NOTE: 中转模式下 userinfo 由路由器端提取并透传
+            const userinfo = parseSubscriptionUserinfo(json.userinfo || null);
+            resolve({ text: json.content, userinfo });
           } else {
             reject(new Error(json.error || 'China proxy fetch failed'));
           }
@@ -146,7 +179,7 @@ async function chinaProxyFetch(url) {
 /**
  * Store parsed nodes, replacing any existing nodes from this subscription
  */
-async function storeNodes(subId, name, nodes) {
+async function storeNodes(subId, name, nodes, userinfo = null) {
   const groupName = `sub-${subId}`;
 
   // Delete old nodes from this subscription
@@ -161,13 +194,17 @@ async function storeNodes(subId, name, nodes) {
   // Add new nodes
   nodeManager.addNodes(nodes);
 
-  // Update subscription metadata
-  nodeManager.updateSubscription(subId, {
+  // NOTE: 保存订阅元数据，包含从上游获取的流量信息
+  const updateData = {
     lastUpdate: new Date().toISOString(),
     nodeCount: nodes.length
-  });
+  };
+  if (userinfo) {
+    updateData.userinfo = userinfo;
+  }
+  nodeManager.updateSubscription(subId, updateData);
 
-  return { count: nodes.length, nodes };
+  return { count: nodes.length, nodes, userinfo };
 }
 
 /**

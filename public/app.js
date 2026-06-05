@@ -1646,7 +1646,7 @@ function openAddBridge() {
         <div class="modal-body">
           <div class="info-card" style="margin-bottom:16px;padding:12px;border-radius:8px;">
             <p style="margin:0;font-size:0.85em;opacity:0.8;">📌 请先在目标服务器运行一键部署脚本：</p>
-            <code style="display:block;margin-top:6px;padding:8px;border-radius:6px;font-size:0.8em;word-break:break-all;cursor:pointer;" onclick="copyText(this.textContent)">bash <(curl -sL https://gitee.com/ranxiaoer/subhub/raw/main/sui-bridge/install_bridge.sh)</code>
+            <code style="display:block;margin-top:6px;padding:8px;border-radius:6px;font-size:0.8em;word-break:break-all;cursor:pointer;" onclick="copyText(this.textContent)">bash <(curl -sL https://raw.githubusercontent.com/xyf0104/subhub/main/sui-bridge/install_bridge.sh)</code>
           </div>
           <form id="bridgeForm" onsubmit="submitBridge(event)">
             <div class="form-group">

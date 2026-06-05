@@ -2,7 +2,7 @@
 # ============================================================
 #  🔗 SubHub Bridge — 一键部署脚本
 #  在已安装 S-UI 的服务器上部署流量监控桥接服务
-#  用法: bash <(curl -sL https://gitee.com/ranxiaoer/subhub/raw/main/sui-bridge/install_bridge.sh)
+#  用法: bash <(curl -sL https://raw.githubusercontent.com/xyf0104/subhub/main/sui-bridge/install_bridge.sh)
 # ============================================================
 
 set -e
@@ -105,19 +105,23 @@ if [ -f "$BRIDGE_SCRIPT" ]; then
     cp "$BRIDGE_SCRIPT" "${BRIDGE_SCRIPT}.bak.$(date +%Y%m%d%H%M%S)"
 fi
 
-# 尝试从 Gitee 下载最新版（如果可用）
+# 尝试下载最新版 sui_bridge.py（GitHub 优先 -> Gitee -> 内嵌 base64）
 DOWNLOADED=false
-SCRIPT_URL="https://gitee.com/ranxiaoer/subhub/raw/main/sui-bridge/sui_bridge.py"
-if curl -sL --connect-timeout 10 "$SCRIPT_URL" -o "$BRIDGE_SCRIPT.tmp" 2>/dev/null && [ -s "$BRIDGE_SCRIPT.tmp" ]; then
-    # 检查下载的内容是否为有效 Python（Gitee 可能返回审查提示）
-    if python3 -c "import ast; ast.parse(open('$BRIDGE_SCRIPT.tmp').read())" 2>/dev/null; then
-        mv "$BRIDGE_SCRIPT.tmp" "$BRIDGE_SCRIPT"
-        info "从 Gitee 下载成功（最新版）"
-        DOWNLOADED=true
-    else
-        rm -f "$BRIDGE_SCRIPT.tmp"
-        warn "Gitee 内容审查拦截，使用内嵌版本"
+GITHUB_URL="https://raw.githubusercontent.com/xyf0104/subhub/main/sui-bridge/sui_bridge.py"
+GITEE_URL="https://gitee.com/ranxiaoer/subhub/raw/main/sui-bridge/sui_bridge.py"
+
+for URL in "$GITHUB_URL" "$GITEE_URL"; do
+    if curl -sL --connect-timeout 10 "$URL" -o "$BRIDGE_SCRIPT.tmp" 2>/dev/null && [ -s "$BRIDGE_SCRIPT.tmp" ]; then
+        if python3 -c "import ast; ast.parse(open('$BRIDGE_SCRIPT.tmp').read())" 2>/dev/null; then
+            mv "$BRIDGE_SCRIPT.tmp" "$BRIDGE_SCRIPT"
+            info "下载成功（最新版）"
+            DOWNLOADED=true
+            break
+        else
+            rm -f "$BRIDGE_SCRIPT.tmp"
+        fi
     fi
+done
 fi
 
 # 内嵌版本 fallback

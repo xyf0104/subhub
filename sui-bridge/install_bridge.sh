@@ -86,6 +86,16 @@ read -r LABEL
 [ -z "$LABEL" ] && LABEL="$REGION"
 info "显示名: $LABEL"
 
+# S-UI 域名（关键！生成节点地址用）
+ask "S-UI 域名（如 us.example.com，必填，节点地址用）:"
+read -r SUI_DOMAIN
+while [ -z "$SUI_DOMAIN" ]; do
+    warn "域名不能为空，否则节点地址将显示为 your-sui-domain.com"
+    ask "S-UI 域名:"
+    read -r SUI_DOMAIN
+done
+info "域名: $SUI_DOMAIN"
+
 # NOTE: sui_bridge.py 通过 base64 内嵌，避免 Gitee 内容审查拦截
 info "释放 sui_bridge.py ..."
 
@@ -136,6 +146,7 @@ Type=simple
 Environment=SUI_DB_PATH=$SUI_DB
 Environment=BRIDGE_TOKEN=$BRIDGE_TOKEN
 Environment=BRIDGE_PORT=$BRIDGE_PORT
+Environment=SUI_DOMAIN=$SUI_DOMAIN
 ExecStart=/usr/bin/python3 $BRIDGE_SCRIPT
 Restart=always
 RestartSec=5

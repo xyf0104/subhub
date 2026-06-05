@@ -321,16 +321,9 @@ router.get('/stats', requireAuth, (req, res) => {
 router.get('/traffic', requireAuth, async (req, res) => {
   try {
     const http = require('http');
-    const SUI_BRIDGE_TOKEN = process.env.SUI_BRIDGE_TOKEN || 'subhub_bridge_change_me';
 
-    // 解析多 bridge 配置（与 share.js 保持一致）
-    let bridges = [];
-    if (process.env.SUI_BRIDGES) {
-      try { bridges = JSON.parse(process.env.SUI_BRIDGES); } catch {}
-    }
-    if (bridges.length === 0) {
-      bridges = [{ region: 'jp', hostname: '103.200.97.23', port: 9876, token: SUI_BRIDGE_TOKEN }];
-    }
+    // NOTE: 使用 loadBridges() 统一读取
+    const bridges = loadBridges();
 
     /**
      * 请求单个 bridge 的流量数据
@@ -342,7 +335,7 @@ router.get('/traffic', requireAuth, async (req, res) => {
           port: bridge.port || 9876,
           path: '/api/traffic',
           method: 'GET',
-          headers: { 'X-Token': bridge.token || SUI_BRIDGE_TOKEN },
+          headers: { 'X-Token': bridge.token },
           timeout: 8000,
         };
         const r = http.request(opts, (resp) => {
@@ -399,15 +392,9 @@ router.get('/traffic', requireAuth, async (req, res) => {
 router.get('/sui-inbounds', requireAuth, async (req, res) => {
   try {
     const http = require('http');
-    const SUI_BRIDGE_TOKEN = process.env.SUI_BRIDGE_TOKEN || 'subhub_bridge_change_me';
 
-    let bridges = [];
-    if (process.env.SUI_BRIDGES) {
-      try { bridges = JSON.parse(process.env.SUI_BRIDGES); } catch {}
-    }
-    if (bridges.length === 0) {
-      bridges = [{ region: 'jp', hostname: '103.200.97.23', port: 9876, token: SUI_BRIDGE_TOKEN }];
-    }
+    // NOTE: 使用 loadBridges() 统一读取（bridges.json + 环境变量 fallback）
+    const bridges = loadBridges();
 
     function fetchInbounds(bridge) {
       return new Promise((resolve) => {
@@ -416,7 +403,7 @@ router.get('/sui-inbounds', requireAuth, async (req, res) => {
           port: bridge.port || 9876,
           path: '/api/inbounds',
           method: 'GET',
-          headers: { 'X-Token': bridge.token || SUI_BRIDGE_TOKEN },
+          headers: { 'X-Token': bridge.token },
           timeout: 8000,
         };
         const r = http.request(opts, (resp) => {

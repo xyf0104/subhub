@@ -723,8 +723,24 @@ module.exports.shareSubscribeHandler = async (req, res) => {
     let totalQuota = share.trafficLimit || 0;
     let latestExpire = share.expireAt ? Math.floor(new Date(share.expireAt).getTime() / 1000) : 0;
 
-    // 1. 从 S-UI bridge 获取的流量（已在 GET /shares 时合并到 trafficUsed）
-    totalDownload += (share.trafficUsed || 0);
+    // 1. 从 S-UI bridge 实时获取该用户的上下行流量
+    if (suiBridges && Object.keys(suiBridges).length > 0) {
+      const trafficTasks = Object.entries(suiBridges).map(async ([region, info]) => {
+        if (!info.clientName) return { up: 0, down: 0 };
+        try {
+          const data = await suiBridgeRequest(region, 'GET', '/api/clients');
+          const client = (data.clients || []).find(c => c.name === info.clientName);
+          return { up: client?.up || 0, down: client?.down || 0 };
+        } catch {
+          return { up: 0, down: 0 };
+        }
+      });
+      const trafficResults = await Promise.all(trafficTasks);
+      for (const t of trafficResults) {
+        totalUpload += t.up;
+        totalDownload += t.down;
+      }
+    }
 
     // 2. 从订阅源获取的流量信息
     const allSubs = nodeManager.getAllSubscriptions ? nodeManager.getAllSubscriptions() : [];

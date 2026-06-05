@@ -122,7 +122,6 @@ for URL in "$GITHUB_URL" "$GITEE_URL"; do
         fi
     fi
 done
-fi
 
 # 内嵌版本 fallback
 if [ "$DOWNLOADED" = false ]; then

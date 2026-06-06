@@ -1195,11 +1195,8 @@ function toggleEditShareAll(checked) {
 }
 
 let _editShareNodes = [];
-let _editShareFilter = { sub: 'all', search: '' };
-
 /**
- * 打开编辑分享 — 紧凑单页版
- * NOTE: 顶部一行基本配置+自建节点，下方节点选择器占满空间
+ * 打开编辑分享 — 高级大弹窗分栏版 (Split Modal)
  */
 let _currentEditShareId = '';
 let _currentNodeOverrides = {};
@@ -1223,59 +1220,95 @@ async function openEditShare(shareId) {
     const trafficGB = share.trafficLimit > 0 ? (share.trafficLimit / 1073741824).toFixed(1) : '';
     const expireDate = share.expireAt ? new Date(share.expireAt).toISOString().split('T')[0] : '';
     const suiBridgesData = share.suiBridges || (share.suiClientName ? { jp: { clientName: share.suiClientName, inboundIds: share.suiInboundIds || [] } } : {});
-    const selectedNodes = _editShareNodes.filter(n => currentIds.has(n.id));
-    const selectedSui = SUI_INBOUNDS.filter(ib => {
-      const regionInfo = suiBridgesData[ib.region];
-      return regionInfo && (regionInfo.inboundIds || []).includes(ib.id);
-    });
 
-    // 切换到编辑页面
-    document.querySelectorAll('.page-section').forEach(s => s.classList.remove('active'));
-    document.getElementById('page-edit-share').classList.add('active');
-    document.getElementById('pageTitle').textContent = `编辑 - ${share.title}`;
-    document.getElementById('headerActions').innerHTML = `<button class="btn btn-primary btn-sm" onclick="submitEditShare('${shareId}')">💾 保存</button>`;
+    // 构建 DOM
+    let modal = document.getElementById('editShareModal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'editShareModal';
+      modal.className = 'modal-overlay';
+      document.body.appendChild(modal);
+    }
 
-    const el = document.getElementById('edit-share-content');
-    el.innerHTML = `
-      <!-- 顶部：返回 + 基本配置（一行紧凑） -->
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap">
-        <button class="btn btn-secondary btn-sm" onclick="navigate('shares')">← 返回</button>
-        <div style="display:flex;align-items:center;gap:8px;flex:1;flex-wrap:wrap">
-          <input class="form-input" id="editShareTitle" value="${esc(share.title)}" placeholder="标题" style="max-width:160px;font-size:0.85em">
-          <div class="input-with-btn" style="max-width:140px">
-            <input class="form-input" id="editShareTraffic" type="number" step="0.1" value="${trafficGB}" placeholder="流量GB" style="font-size:0.85em">
-            <button type="button" class="btn-infinity" onclick="document.getElementById('editShareTraffic').value=''">♾️</button>
-          </div>
-          <div class="input-with-btn" style="max-width:160px">
-            <input class="form-input" id="editShareExpire" type="date" value="${expireDate}" style="font-size:0.85em">
-            <button type="button" class="btn-infinity" onclick="document.getElementById('editShareExpire').value=''">♾️</button>
+    modal.innerHTML = `
+      <div class="modal modal-split">
+        <!-- 弹窗头部 -->
+        <div class="modal-header" style="padding:16px 24px;border-bottom:1px solid var(--border-color);display:flex;justify-content:space-between;align-items:center;">
+          <h3 style="margin:0;font-size:1.1rem;font-weight:600;">编辑分享 - <span style="color:var(--accent);">${esc(share.title)}</span></h3>
+          <div style="display:flex;gap:12px;">
+            <button class="btn btn-secondary" onclick="closeModal('editShareModal')">取消</button>
+            <button class="btn btn-primary" onclick="submitEditShare('${shareId}')" style="min-width:100px;">💾 保存配置</button>
           </div>
         </div>
-      </div>
 
-      <!-- 自建节点（可折叠，减少占用空间） -->
-      ${SUI_INBOUNDS.length > 0 ? `
-      <details open style="background:var(--card-bg);border-radius:10px;border:1px solid var(--border-color);margin-bottom:10px">
-        <summary style="padding:8px 14px;cursor:pointer;font-weight:600;font-size:0.88em;user-select:none">
-          🔗 自建节点（点击折叠/展开）
-        </summary>
-        <div style="padding:4px 14px 10px;display:flex;flex-wrap:wrap;gap:0">
-          ${renderSuiInboundSelector(suiBridgesData, 'editSuiInbound', 'editShareNodeList')}
+        <!-- 弹窗内容 (分栏) -->
+        <div class="modal-body" style="padding:0;display:flex;flex:1;overflow:hidden;flex-direction:row;">
+          
+          <!-- 左侧：基础配置 & 自建节点 -->
+          <div class="modal-split-sidebar">
+            <div style="display:flex;flex-direction:column;gap:16px;">
+              <div class="form-group" style="margin:0;">
+                <label style="font-weight:600;font-size:0.9rem;margin-bottom:6px;">📝 分享标题</label>
+                <input class="form-input" id="editShareTitle" value="${esc(share.title)}" placeholder="用户名称">
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div class="form-group" style="margin:0;">
+                  <label style="font-weight:600;font-size:0.9rem;margin-bottom:6px;">📊 流量 (GB)</label>
+                  <div class="input-with-btn">
+                    <input class="form-input" id="editShareTraffic" type="number" step="0.1" value="${trafficGB}" placeholder="不限">
+                    <button type="button" class="btn-infinity" title="无限" onclick="document.getElementById('editShareTraffic').value=''">♾️</button>
+                  </div>
+                </div>
+                <div class="form-group" style="margin:0;">
+                  <label style="font-weight:600;font-size:0.9rem;margin-bottom:6px;">⏰ 到期</label>
+                  <div class="input-with-btn">
+                    <input class="form-input" id="editShareExpire" type="date" value="${expireDate}" style="padding-left:8px;padding-right:8px;">
+                    <button type="button" class="btn-infinity" title="永久" onclick="document.getElementById('editShareExpire').value=''">♾️</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            ${SUI_INBOUNDS.length > 0 ? `
+            <div style="border-top:1px dashed var(--border-color);padding-top:20px;">
+              <h4 style="margin:0 0 12px;font-size:0.95rem;display:flex;align-items:center;gap:6px;">🔗 自建节点 (Bridge)</h4>
+              <div style="display:flex;flex-direction:column;gap:8px;">
+                ${renderSuiInboundSelector(suiBridgesData, 'editSuiInbound', 'editShareNodeList')}
+              </div>
+            </div>` : ''}
+
+            ${Object.keys(suiBridgesData).length > 0 ? `
+            <div style="border-top:1px dashed var(--border-color);padding-top:20px;">
+              <h4 style="margin:0 0 12px;font-size:0.95rem;">🌍 独立区域配置</h4>
+              ${buildRegionConfigRows(suiBridgesData, 'editShareTraffic')}
+            </div>` : ''}
+          </div>
+
+          <!-- 右侧：订阅节点选择器 -->
+          <div class="modal-split-main">
+            <!-- 注入原始节点选择器的容器 -->
+            <div id="editShareNodeList" style="display:flex;flex-direction:column;height:100%;"></div>
+          </div>
         </div>
-      </details>` : ''}
-      ${buildRegionConfigRows(suiBridgesData, 'editShareTraffic')}
-
-      <!-- 节点选择器（占满剩余空间） -->
-      <div id="editShareNodeList" class="share-node-list"></div>
-
-      <!-- 底部保存 -->
-      <div style="margin-top:12px;display:flex;justify-content:flex-end;gap:10px;padding-bottom:12px">
-        <button class="btn btn-secondary" onclick="navigate('shares')">取消</button>
-        <button class="btn btn-primary" onclick="submitEditShare('${shareId}')">💾 保存修改</button>
       </div>
     `;
 
+    modal.classList.add('active');
+
+    // 在右侧容器中构建原生节点选择器
     buildShareNodeSelector('editShareNodeList', 'editShareNode', _editShareNodes, currentIds, suiBridgesData);
+
+    // 微调 buildShareNodeSelector 生成的样式以适应右侧布局
+    const listContainer = document.getElementById('editShareNodeList');
+    const toolbar = listContainer.querySelector('.share-node-toolbar');
+    const grid = listContainer.querySelector('.share-node-grid');
+    if (toolbar) {
+      toolbar.className = 'nodes-toolbar'; // 替换为分栏顶部工具栏样式
+    }
+    if (grid) {
+      grid.className = 'nodes-list-scroll'; // 替换为滚动区域样式
+    }
+
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -1518,7 +1551,7 @@ async function submitEditShare(shareId) {
       })
     });
     toast('分享已更新', 'success');
-    navigate('shares');
+    closeModal('editShareModal');
     loadShares();
   } catch (e) { toast(e.message, 'error'); }
 }

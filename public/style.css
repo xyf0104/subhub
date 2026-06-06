@@ -610,7 +610,7 @@ textarea.form-input {
 }
 .share-node-count strong { color: var(--accent); }
 .share-node-grid {
-  max-height: 60vh; overflow-y: auto; display: flex; flex-direction: column;
+  max-height: calc(100vh - 280px); min-height: 300px; overflow-y: auto; display: flex; flex-direction: column;
   gap: 2px; padding: 4px 0;
 }
 .share-node-name {

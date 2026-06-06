@@ -610,8 +610,12 @@ textarea.form-input {
 }
 .share-node-count strong { color: var(--accent); }
 .share-node-grid {
-  max-height: calc(100vh - 280px); min-height: 300px; overflow-y: auto; display: flex; flex-direction: column;
+  max-height: 60vh; overflow-y: auto; display: flex; flex-direction: column;
   gap: 2px; padding: 4px 0;
+}
+/* 全屏编辑页面中节点列表撑满 */
+#page-edit-share .share-node-grid {
+  max-height: none;
 }
 .share-node-name {
   flex: 1; font-weight: 500; overflow: hidden; text-overflow: ellipsis;

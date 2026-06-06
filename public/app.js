@@ -845,9 +845,9 @@ function renderSuiInboundSelector(checkedMap, inputName = 'suiInbound', containe
     const label = bridgeLabel || regionLabels[region] || regionLabels[region.split('-')[0]] || region.toUpperCase();
     const checkedSet = checked[region] || new Set();
     return `
-    <div style="margin-top:12px;padding:12px;background:var(--bg-input);border-radius:8px;border:1px solid var(--border-color);">
-      <div style="font-weight:600;margin-bottom:8px;">${flag} ${label}自建节点</div>
-      <p style="font-size:0.8rem;color:var(--text-muted);margin:0 0 8px;">
+    <div style="margin-top:6px;padding:8px 10px;background:var(--bg-input);border-radius:8px;border:1px solid var(--border-color);">
+      <div style="font-weight:600;margin-bottom:4px;font-size:0.88em">${flag} ${label}自建节点</div>
+      <p style="font-size:0.75rem;color:var(--text-muted);margin:0 0 4px;">
         勾选入站协议，保存后自动同步到${label} s-ui 服务器
       </p>
       ${inbounds.map(ib => `
@@ -1253,16 +1253,16 @@ async function openEditShare(shareId) {
         </div>
       </div>
 
-      <!-- 自建节点（紧凑横向排列） -->
+      <!-- 自建节点（可折叠，减少占用空间） -->
       ${SUI_INBOUNDS.length > 0 ? `
-      <div style="background:var(--card-bg);border-radius:10px;padding:10px 14px;border:1px solid var(--border-color);margin-bottom:12px">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-          <span style="font-weight:600;font-size:0.88em">🔗 自建节点</span>
-        </div>
-        <div style="display:flex;flex-wrap:wrap;gap:6px">
+      <details open style="background:var(--card-bg);border-radius:10px;border:1px solid var(--border-color);margin-bottom:10px">
+        <summary style="padding:8px 14px;cursor:pointer;font-weight:600;font-size:0.88em;user-select:none">
+          🔗 自建节点（点击折叠/展开）
+        </summary>
+        <div style="padding:4px 14px 10px;display:flex;flex-wrap:wrap;gap:0">
           ${renderSuiInboundSelector(suiBridgesData, 'editSuiInbound', 'editShareNodeList')}
         </div>
-      </div>` : ''}
+      </details>` : ''}
       ${buildRegionConfigRows(suiBridgesData, 'editShareTraffic')}
 
       <!-- 节点选择器（占满剩余空间） -->

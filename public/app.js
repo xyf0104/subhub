@@ -1240,9 +1240,10 @@ async function openEditShare(shareId) {
       return regionInfo && (regionInfo.inboundIds || []).includes(ib.id);
     });
 
-    const selectedHtml = (selectedNodes.length + selectedSui.length) > 0 ? `
-      <div class="selected-nodes-section">
-        <h5>✅ 已分享的节点（${selectedNodes.length + selectedSui.length} 个）</h5>
+    const totalSelected = selectedNodes.length + selectedSui.length;
+
+    // NOTE: 已分享节点列表 HTML（默认隐藏，点击标签展开）
+    const selectedListHtml = (selectedNodes.length + selectedSui.length) > 0 ? `
         ${selectedNodes.map(n => {
           const ov = _currentNodeOverrides[n.id];
           const displayName = ov?.name || n.name;
@@ -1273,7 +1274,7 @@ async function openEditShare(shareId) {
             </div>
           </div>`;
         }).join('')}
-      </div>` : '';
+    ` : '<div style="padding:12px;text-align:center;color:var(--text-muted);font-size:0.85rem;">暂无已选节点</div>';
 
     let modal = document.getElementById('editShareModal');
     if (!modal) {
@@ -1283,34 +1284,54 @@ async function openEditShare(shareId) {
       document.body.appendChild(modal);
     }
     modal.innerHTML = `
-      <div class="modal modal-compact" style="max-width:90vw;width:800px;">
-        <div class="modal-header" style="padding:12px 16px;"><h3 style="margin:0;font-size:1rem;">编辑分享 - ${esc(share.title)}</h3><button class="modal-close" onclick="closeModal('editShareModal')">✕</button></div>
-        <div class="modal-body" style="padding:8px 16px 12px;">
-          <div class="edit-share-form">
-            <div class="form-group">
-              <label>📝 分享标题</label>
-              <input class="form-input" id="editShareTitle" value="${esc(share.title)}" placeholder="用户名称">
+      <div class="modal modal-compact" style="max-width:95vw;width:900px;height:90vh;display:flex;flex-direction:column;">
+        <div class="modal-header" style="padding:12px 16px;flex-shrink:0;">
+          <h3 style="margin:0;font-size:1rem;">编辑分享 - ${esc(share.title)}</h3>
+          <button class="modal-close" onclick="closeModal('editShareModal')">✕</button>
+        </div>
+        <div class="modal-body" style="padding:10px 16px;flex:1;overflow-y:auto;display:flex;flex-direction:column;">
+          <!-- 基本配置（横向一行） -->
+          <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px;flex-shrink:0;">
+            <div class="form-group" style="flex:1;min-width:140px;margin:0;">
+              <label style="font-size:0.8rem;">📝 分享标题</label>
+              <input class="form-input" id="editShareTitle" value="${esc(share.title)}" placeholder="用户名称" style="font-size:0.88rem;">
             </div>
-            <div class="form-group">
-              <label>📊 流量限制 (GB)</label>
+            <div class="form-group" style="width:130px;margin:0;">
+              <label style="font-size:0.8rem;">📊 流量 (GB)</label>
               <div class="input-with-btn">
-                <input class="form-input" id="editShareTraffic" type="number" step="0.1" value="${trafficGB}" placeholder="留空=不限">
+                <input class="form-input" id="editShareTraffic" type="number" step="0.1" value="${trafficGB}" placeholder="不限" style="font-size:0.88rem;">
                 <button type="button" class="btn-infinity" title="设为无限" onclick="document.getElementById('editShareTraffic').value='';toast('流量已设为无限','success')">♾️</button>
               </div>
             </div>
-            <div class="form-group">
-              <label>⏰ 到期日期</label>
+            <div class="form-group" style="width:180px;margin:0;">
+              <label style="font-size:0.8rem;">⏰ 到期日期</label>
               <div class="input-with-btn">
-                <input class="form-input" id="editShareExpire" type="date" value="${expireDate}">
+                <input class="form-input" id="editShareExpire" type="date" value="${expireDate}" style="font-size:0.88rem;">
                 <button type="button" class="btn-infinity" title="设为永久" onclick="document.getElementById('editShareExpire').value='';toast('已设为永久有效','success')">♾️</button>
               </div>
             </div>
+            <!-- 已分享标签按钮 -->
+            <button class="btn btn-sm" onclick="toggleSelectedPanel()" style="background:${totalSelected > 0 ? 'var(--accent)' : 'var(--bg-input)'};color:${totalSelected > 0 ? '#fff' : 'var(--text-primary)'};border:1px solid ${totalSelected > 0 ? 'var(--accent)' : 'var(--border-color)'};border-radius:20px;padding:6px 14px;font-size:0.82rem;white-space:nowrap;cursor:pointer;transition:all .2s;">
+              ✅ 已分享 ${totalSelected}
+            </button>
           </div>
+
+          <!-- 已分享节点面板（默认隐藏） -->
+          <div id="editSelectedPanel" style="display:none;flex-shrink:0;margin-bottom:10px;border:1px solid var(--border-color);border-radius:10px;overflow:hidden;">
+            <div style="background:var(--bg-input);padding:8px 14px;display:flex;justify-content:space-between;align-items:center;">
+              <span style="font-weight:600;font-size:0.88rem;">✅ 已分享的节点（${totalSelected} 个）</span>
+              <button class="btn btn-sm btn-secondary" onclick="toggleSelectedPanel()" style="font-size:0.78rem;">收起 ↑</button>
+            </div>
+            <div style="max-height:200px;overflow-y:auto;padding:6px 10px;">
+              ${selectedListHtml}
+            </div>
+          </div>
+
           ${buildRegionConfigRows(suiBridgesData, 'editShareTraffic')}
-          ${selectedHtml}
-          <div id="editShareNodeList" class="share-node-list"></div>
+          <!-- 节点选择器（占满弹窗剩余空间） -->
+          <div id="editShareNodeList" class="share-node-list" style="flex:1;display:flex;flex-direction:column;min-height:0;"></div>
         </div>
-        <div class="modal-footer" style="padding:8px 16px;">
+        <div class="modal-footer" style="padding:8px 16px;flex-shrink:0;">
           <button class="btn btn-secondary" onclick="closeModal('editShareModal')">取消</button>
           <button class="btn btn-primary" onclick="submitEditShare('${shareId}')">保存</button>
         </div>
@@ -1325,8 +1346,22 @@ async function openEditShare(shareId) {
       }
     }
     buildShareNodeSelector('editShareNodeList', 'editShareNode', _editShareNodes, currentIds, suiBridgesData);
+
+    // 让节点列表内的 grid 撑满
+    const grid = document.querySelector('#editShareNodeList .share-node-grid');
+    if (grid) { grid.style.maxHeight = 'none'; grid.style.flex = '1'; grid.style.minHeight = '0'; }
+
     modal.classList.add('active');
   } catch (e) { toast(e.message, 'error'); }
+}
+
+/**
+ * 切换已分享节点面板显示/隐藏
+ */
+function toggleSelectedPanel() {
+  const panel = document.getElementById('editSelectedPanel');
+  if (!panel) return;
+  panel.style.display = panel.style.display === 'none' ? '' : 'none';
 }
 
 /**

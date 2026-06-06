@@ -797,7 +797,8 @@ async function loadSuiInbounds() {
     const data = await api('/sui-inbounds');
     if (data.success && data.inbounds.length > 0) {
       SUI_INBOUNDS = data.inbounds.map(ib => ({
-        id: ib.id, name: ib.tag || `inbound-${ib.id}`, type: ib.type, region: ib.region || 'jp',
+        id: ib.id, name: ib.tag || `inbound-${ib.id}`, type: ib.type,
+        region: ib.region || 'jp', label: ib.label || '',
       }));
     }
   } catch (e) {
@@ -838,8 +839,10 @@ function renderSuiInboundSelector(checkedMap, inputName = 'suiInbound', containe
   }
 
   return Object.entries(groups).map(([region, inbounds]) => {
-    const flag = regionFlags[region] || '🌍';
-    const label = regionLabels[region] || region.toUpperCase();
+    const flag = regionFlags[region] || regionFlags[region.split('-')[0]] || '🌍';
+    // NOTE: 优先使用 Bridge 返回的 label（如"日本徕卡云"），其次用硬编码映射
+    const bridgeLabel = inbounds[0]?.label;
+    const label = bridgeLabel || regionLabels[region] || regionLabels[region.split('-')[0]] || region.toUpperCase();
     const checkedSet = checked[region] || new Set();
     return `
     <div style="margin-top:12px;padding:12px;background:var(--bg-input);border-radius:8px;border:1px solid var(--border-color);">
@@ -871,8 +874,10 @@ function buildRegionConfigRows(suiBridgesData = {}, globalTrafficId = 'shareTraf
   if (regions.length === 0) return '';
 
   return regions.map(region => {
-    const flag = regionFlags[region] || '🌍';
-    const label = regionLabels[region] || region.toUpperCase();
+    const flag = regionFlags[region] || regionFlags[region.split('-')[0]] || '🌍';
+    // NOTE: 优先从 SUI_INBOUNDS 获取 Bridge 的 label
+    const bridgeLabel = SUI_INBOUNDS.find(ib => ib.region === region)?.label;
+    const label = bridgeLabel || regionLabels[region] || regionLabels[region.split('-')[0]] || region.toUpperCase();
     const data = suiBridgesData[region] || {};
     // NOTE: trafficLimitGB === 0 表示无限，undefined 表示未设置
     const trafficVal = (data.trafficLimitGB && data.trafficLimitGB > 0) ? data.trafficLimitGB : '';

@@ -413,7 +413,7 @@ router.get('/sui-inbounds', requireAuth, async (req, res) => {
             try {
               const data = JSON.parse(body);
               const inbounds = (data.inbounds || []).map(ib => ({
-                ...ib, region: bridge.region,
+                ...ib, region: bridge.region, label: bridge.label || bridge.region,
               }));
               resolve({ region: bridge.region, success: true, inbounds });
             } catch {

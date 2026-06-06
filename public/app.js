@@ -1579,7 +1579,7 @@ function toggleMobileMenu() { document.querySelector('.sidebar').classList.toggl
 
 /**
  * 加载并展示 Bridge 列表
- * NOTE: 每次加载会并行测试所有 bridge 状态
+ * NOTE: 卡片式展示，每个 Bridge 为独立视觉单元
  */
 async function loadBridges() {
   const el = document.getElementById('bridges-content');
@@ -1589,43 +1589,96 @@ async function loadBridges() {
     if (bridges.length === 0) {
       el.innerHTML = `
         <div class="empty-state">
-          <div class="icon">🔗</div>
-          <h3>暂无 Bridge</h3>
-          <p>Bridge 用于连接自建节点服务器的 S-UI，实现按用户精确追踪流量</p>
-          <button class="btn btn-primary" onclick="openAddBridge()">+ 添加 Bridge</button>
+          <div class="icon" style="font-size:3em">🔗</div>
+          <h3 style="margin-top:12px">暂无 Bridge 连接</h3>
+          <p style="opacity:0.6;margin-bottom:20px">Bridge 用于连接自建节点服务器的 S-UI，实现按用户精确追踪流量</p>
+          <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+            <button class="btn btn-primary" onclick="openAddBridge()">➕ 手动添加</button>
+            <button class="btn btn-secondary" onclick="openJsonImport()">📋 JSON 导入</button>
+          </div>
         </div>`;
       return;
     }
 
+    const regionEmoji = (r) => {
+      const code = (r || '').split('-')[0].toLowerCase();
+      const map = {jp:'🇯🇵',us:'🇺🇸',hk:'🇭🇰',sg:'🇸🇬',tw:'🇹🇼',kr:'🇰🇷',de:'🇩🇪',gb:'🇬🇧',fr:'🇫🇷',nl:'🇳🇱',au:'🇦🇺',ca:'🇨🇦',in:'🇮🇳',ru:'🇷🇺',tr:'🇹🇷'};
+      return map[code] || '🌐';
+    };
+
     let html = `
-      <div class="info-card" style="margin-bottom:16px;padding:12px 16px;border-radius:10px;">
-        <p style="margin:0;opacity:0.7;">💡 Bridge 连接自建服务器的 S-UI，在编辑分享时勾选入站即可按用户追踪流量。新服务器需先运行一键部署脚本。</p>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn btn-primary" onclick="openAddBridge()">➕ 添加</button>
+          <button class="btn btn-secondary" onclick="openJsonImport()">📋 JSON 导入</button>
+        </div>
+        <button class="btn btn-secondary" onclick="testAllBridges()" id="testAllBtn">🔄 全部测试</button>
       </div>
-      <div class="table-wrapper"><table class="data-table">
-      <thead><tr>
-        <th>状态</th><th>区域</th><th>显示名</th><th>地址</th><th>延迟</th><th>客户端</th><th>操作</th>
-      </tr></thead><tbody>`;
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px">`;
 
     for (const b of bridges) {
-      const statusDot = b.status === 'online'
-        ? '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#22c55e;box-shadow:0 0 6px #22c55e;"></span>'
-        : '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#ef4444;box-shadow:0 0 6px #ef4444;"></span>';
-      const latencyText = b.status === 'online' ? `${b.latency}ms` : '-';
-      html += `<tr>
-        <td>${statusDot}</td>
-        <td><strong>${esc(b.region)}</strong></td>
-        <td>${esc(b.label)}</td>
-        <td><code>${esc(b.hostname)}:${b.port}</code></td>
-        <td>${latencyText}</td>
-        <td>${b.clients}</td>
-        <td>
-          <button class="btn btn-sm btn-secondary" onclick="testBridge('${b.id}')">🔍 测试</button>
+      const isOnline = b.status === 'online';
+      const borderColor = isOnline ? 'rgba(34,197,94,0.4)' : 'rgba(239,68,68,0.3)';
+      const glowColor = isOnline ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.1)';
+      const statusText = isOnline ? '在线' : '离线';
+      const statusColor = isOnline ? '#22c55e' : '#ef4444';
+      const latencyText = isOnline ? `${b.latency}ms` : '-';
+      const latencyColor = isOnline ? (b.latency < 200 ? '#22c55e' : b.latency < 500 ? '#f59e0b' : '#ef4444') : '#666';
+      const emoji = regionEmoji(b.region);
+
+      html += `
+      <div class="bridge-card" id="bridge-${b.id}" style="
+        background:var(--card-bg);border:1px solid ${borderColor};border-radius:14px;
+        padding:20px;position:relative;overflow:hidden;
+        box-shadow:0 4px 24px ${glowColor};
+        transition:all 0.3s ease;cursor:default;
+      " onmouseenter="this.style.transform='translateY(-3px)';this.style.boxShadow='0 8px 32px ${glowColor}'"
+         onmouseleave="this.style.transform='';this.style.boxShadow='0 4px 24px ${glowColor}'">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:1.8em">${emoji}</span>
+            <div>
+              <div style="font-weight:700;font-size:1.05em">${esc(b.label)}</div>
+              <div style="font-size:0.78em;opacity:0.5;font-family:monospace">${esc(b.region)}</div>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px">
+            <span style="width:8px;height:8px;border-radius:50%;background:${statusColor};
+              box-shadow:0 0 8px ${statusColor};display:inline-block;
+              ${isOnline ? 'animation:bridgePulse 2s infinite' : ''}"></span>
+            <span style="font-size:0.75em;color:${statusColor};font-weight:600">${statusText}</span>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">
+          <div style="background:var(--bg-color);border-radius:8px;padding:8px 12px;text-align:center">
+            <div style="font-size:0.68em;opacity:0.5;margin-bottom:2px">延迟</div>
+            <div style="font-weight:700;color:${latencyColor}">${latencyText}</div>
+          </div>
+          <div style="background:var(--bg-color);border-radius:8px;padding:8px 12px;text-align:center">
+            <div style="font-size:0.68em;opacity:0.5;margin-bottom:2px">客户端</div>
+            <div style="font-weight:700">${b.clients ?? '-'}</div>
+          </div>
+        </div>
+        <div style="font-size:0.78em;opacity:0.6;font-family:monospace;margin-bottom:14px;
+          background:var(--bg-color);padding:6px 10px;border-radius:6px;word-break:break-all">
+          ${esc(b.hostname)}:${b.port}
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-sm btn-secondary" style="flex:1" onclick="testBridge('${b.id}')">🔍 测试</button>
+          <button class="btn btn-sm btn-secondary" onclick="copyBridgeJson('${b.id}')" title="复制配置">📋</button>
           <button class="btn btn-sm btn-danger" onclick="deleteBridge('${b.id}','${esc(b.label)}')">🗑</button>
-        </td>
-      </tr>`;
+        </div>
+      </div>`;
     }
-    html += '</tbody></table></div>';
+    html += '</div>';
+    if (!document.getElementById('bridge-pulse-style')) {
+      const style = document.createElement('style');
+      style.id = 'bridge-pulse-style';
+      style.textContent = '@keyframes bridgePulse{0%,100%{opacity:1;box-shadow:0 0 8px currentColor}50%{opacity:0.4;box-shadow:0 0 4px currentColor}}';
+      document.head.appendChild(style);
+    }
     el.innerHTML = html;
+    window._bridgesData = bridges;
   } catch (e) { el.innerHTML = `<div class="empty-state"><p>加载失败: ${esc(e.message)}</p></div>`; }
 }
 
@@ -1734,6 +1787,160 @@ async function deleteBridge(bridgeId, label) {
     toast(`Bridge "${label}" 已删除`, 'success');
     loadBridges();
   } catch (e) { toast(e.message, 'error'); }
+}
+
+/**
+ * 复制 Bridge 的 JSON 配置
+ * NOTE: 方便用户备份或迁移 Bridge 配置
+ */
+function copyBridgeJson(bridgeId) {
+  const b = (window._bridgesData || []).find(x => x.id === bridgeId);
+  if (!b) { toast('未找到配置', 'error'); return; }
+  const json = JSON.stringify({
+    region: b.region, label: b.label,
+    hostname: b.hostname, port: b.port, token: b.token
+  });
+  copyText(json);
+}
+
+/**
+ * 全部测试 Bridge
+ */
+async function testAllBridges() {
+  const btn = document.getElementById('testAllBtn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ 测试中...'; }
+  toast('正在测试所有 Bridge...', 'info');
+  try {
+    await loadBridges();
+    toast('全部测试完成', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = '🔄 全部测试'; } }
+}
+
+/**
+ * 打开 JSON 导入弹窗
+ * NOTE: 支持粘贴单个 JSON 或 JSON 数组批量导入
+ */
+function openJsonImport() {
+  let modal = document.getElementById('jsonImportModal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'jsonImportModal';
+    modal.className = 'modal-overlay';
+    modal.innerHTML = `
+      <div class="modal" style="max-width:560px;">
+        <div class="modal-header">
+          <h3>📋 JSON 快速导入</h3>
+          <button class="modal-close" onclick="closeModal('jsonImportModal')">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="info-card" style="margin-bottom:16px;padding:12px;border-radius:8px;">
+            <p style="margin:0;font-size:0.82em;opacity:0.7;">
+              粘贴安装脚本输出的 JSON 配置，支持单个或数组格式：
+            </p>
+            <code style="display:block;margin-top:8px;padding:8px;border-radius:6px;font-size:0.75em;word-break:break-all;opacity:0.6;">
+              {"region":"jp-xx","label":"日本","hostname":"1.2.3.4","port":9876,"token":"subhub_bridge_xxx"}
+            </code>
+          </div>
+          <div class="form-group">
+            <label>JSON 配置</label>
+            <textarea class="form-input" id="jsonImportInput" rows="5" 
+              placeholder='粘贴 JSON 配置...'
+              style="font-family:monospace;font-size:0.85em;resize:vertical;"></textarea>
+          </div>
+          <div id="jsonPreview" style="display:none;margin-bottom:12px;"></div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeModal('jsonImportModal')">取消</button>
+            <button type="button" class="btn btn-primary" id="jsonImportBtn" onclick="submitJsonImport()">🚀 导入并测试</button>
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    // 粘贴时自动解析预览
+    document.getElementById('jsonImportInput').addEventListener('input', previewJsonImport);
+  }
+  document.getElementById('jsonImportInput').value = '';
+  document.getElementById('jsonPreview').style.display = 'none';
+  modal.classList.add('active');
+  setTimeout(() => document.getElementById('jsonImportInput').focus(), 100);
+}
+
+/**
+ * 预览粘贴的 JSON
+ */
+function previewJsonImport() {
+  const input = document.getElementById('jsonImportInput').value.trim();
+  const preview = document.getElementById('jsonPreview');
+  if (!input) { preview.style.display = 'none'; return; }
+  try {
+    let items = JSON.parse(input);
+    if (!Array.isArray(items)) items = [items];
+    const valid = items.filter(i => i.hostname && i.token);
+    if (valid.length === 0) { 
+      preview.innerHTML = '<div style="color:#ef4444;font-size:0.85em;padding:8px;background:rgba(239,68,68,0.1);border-radius:8px">⚠️ 未找到有效配置（需要 hostname 和 token 字段）</div>';
+      preview.style.display = 'block';
+      return;
+    }
+    let html = '<div style="font-size:0.85em;padding:10px;background:var(--bg-color);border-radius:8px">';
+    html += `<div style="margin-bottom:6px;font-weight:600;color:#22c55e">✅ 识别到 ${valid.length} 个 Bridge：</div>`;
+    for (const v of valid) {
+      html += `<div style="padding:4px 0;opacity:0.8">• <strong>${esc(v.label || v.region || '未知')}</strong> — ${esc(v.hostname)}:${v.port || 9876}</div>`;
+    }
+    html += '</div>';
+    preview.innerHTML = html;
+    preview.style.display = 'block';
+  } catch {
+    preview.innerHTML = '<div style="color:#ef4444;font-size:0.85em;padding:8px;background:rgba(239,68,68,0.1);border-radius:8px">⚠️ JSON 格式错误，请检查</div>';
+    preview.style.display = 'block';
+  }
+}
+
+/**
+ * 提交 JSON 导入
+ * NOTE: 支持批量导入多个 Bridge
+ */
+async function submitJsonImport() {
+  const input = document.getElementById('jsonImportInput').value.trim();
+  const btn = document.getElementById('jsonImportBtn');
+  if (!input) { toast('请粘贴 JSON 配置', 'error'); return; }
+  
+  let items;
+  try {
+    items = JSON.parse(input);
+    if (!Array.isArray(items)) items = [items];
+  } catch { toast('JSON 格式错误', 'error'); return; }
+
+  const valid = items.filter(i => i.hostname && i.token);
+  if (valid.length === 0) { toast('未找到有效配置', 'error'); return; }
+
+  btn.disabled = true;
+  btn.textContent = '⏳ 导入中...';
+  let success = 0, fail = 0;
+
+  for (const item of valid) {
+    try {
+      const data = {
+        region: (item.region || 'custom').trim().toLowerCase(),
+        label: (item.label || item.region || '未知').trim(),
+        hostname: item.hostname.trim(),
+        port: parseInt(item.port) || 9876,
+        token: item.token.trim(),
+      };
+      await api('/bridges', { method: 'POST', body: JSON.stringify(data) });
+      success++;
+    } catch { fail++; }
+  }
+
+  btn.disabled = false;
+  btn.textContent = '🚀 导入并测试';
+  
+  if (success > 0) {
+    toast(`成功导入 ${success} 个 Bridge${fail > 0 ? `，${fail} 个失败` : ''}`, success > 0 ? 'success' : 'error');
+    closeModal('jsonImportModal');
+    loadBridges();
+  } else {
+    toast(`导入失败：${fail} 个 Bridge 添加失败`, 'error');
+  }
 }
 
 

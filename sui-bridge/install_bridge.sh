@@ -17,8 +17,7 @@ ask()   { echo -ne "${CYAN}[?]${NC} $* "; }
 
 BRIDGE_SCRIPT="/opt/sui_bridge.py"
 SERVICE_NAME="sui-bridge"
-SCRIPT_URL="https://gitee.com/ranxiaoer/subhub/raw/main/sui-bridge/sui_bridge.py"
-VPS_IP=$(curl -s4 --connect-timeout 5 ifconfig.me 2>/dev/null || curl -s4 --connect-timeout 5 ip.sb 2>/dev/null || echo "YOUR_VPS_IP")
+SCRIPT_URL="https://raw.githubusercontent.com/xyf0104/subhub/main/sui-bridge/sui_bridge.py"
 
 echo ""
 echo -e "${PURPLE}╔══════════════════════════════════════════════════╗${NC}"
@@ -56,45 +55,111 @@ conn.close()
 " 2>/dev/null || echo "0")
 info "当前 S-UI 入站数: $INBOUND_COUNT"
 
-# ==================== 1. 交互配置 ====================
+# ==================== 1. 智能识别 ====================
 echo ""
-echo -e "${BLUE}━━━━━━━━━━━━━━━ 配置参数 ━━━━━━━━━━━━━━━${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━ 🌍 环境探测 ━━━━━━━━━━━━━━━${NC}"
+echo ""
+
+# 获取公网 IP（优先 IPv4）
+VPS_IPV4=$(curl -s4 --connect-timeout 5 ifconfig.me 2>/dev/null \
+    || curl -s4 --connect-timeout 5 ip.sb 2>/dev/null \
+    || curl -s4 --connect-timeout 5 ipv4.icanhazip.com 2>/dev/null \
+    || echo "")
+VPS_IPV6=$(curl -s6 --connect-timeout 5 ifconfig.me 2>/dev/null \
+    || curl -s6 --connect-timeout 5 ip.sb 2>/dev/null \
+    || echo "")
+
+# 优先使用 IPv4
+if [ -n "$VPS_IPV4" ]; then
+    VPS_IP="$VPS_IPV4"
+    info "公网 IPv4: $VPS_IPV4"
+elif [ -n "$VPS_IPV6" ]; then
+    VPS_IP="$VPS_IPV6"
+    info "公网 IPv6: $VPS_IPV6"
+    warn "未检测到 IPv4，将使用 IPv6"
+else
+    VPS_IP="YOUR_VPS_IP"
+    warn "无法获取公网 IP"
+fi
+
+# 通过 IP 地理位置 API 自动识别区域
+AUTO_COUNTRY=""
+AUTO_REGION=""
+AUTO_LABEL=""
+if [ -n "$VPS_IPV4" ]; then
+    GEO_DATA=$(curl -s --connect-timeout 5 "http://ip-api.com/json/${VPS_IPV4}?fields=countryCode,country" 2>/dev/null || echo "")
+    if [ -n "$GEO_DATA" ]; then
+        AUTO_COUNTRY=$(echo "$GEO_DATA" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('countryCode',''))" 2>/dev/null || echo "")
+    fi
+fi
+
+# 国家代码 → 区域标签 + 显示名映射
+RANDOM_SUFFIX=$(openssl rand -hex 2 2>/dev/null || head -c 4 /dev/urandom | xxd -p)
+case "$AUTO_COUNTRY" in
+    JP) AUTO_REGION="jp-${RANDOM_SUFFIX}"; AUTO_LABEL="日本" ;;
+    US) AUTO_REGION="us-${RANDOM_SUFFIX}"; AUTO_LABEL="美国" ;;
+    HK) AUTO_REGION="hk-${RANDOM_SUFFIX}"; AUTO_LABEL="香港" ;;
+    SG) AUTO_REGION="sg-${RANDOM_SUFFIX}"; AUTO_LABEL="新加坡" ;;
+    TW) AUTO_REGION="tw-${RANDOM_SUFFIX}"; AUTO_LABEL="台湾" ;;
+    KR) AUTO_REGION="kr-${RANDOM_SUFFIX}"; AUTO_LABEL="韩国" ;;
+    DE) AUTO_REGION="de-${RANDOM_SUFFIX}"; AUTO_LABEL="德国" ;;
+    GB) AUTO_REGION="gb-${RANDOM_SUFFIX}"; AUTO_LABEL="英国" ;;
+    FR) AUTO_REGION="fr-${RANDOM_SUFFIX}"; AUTO_LABEL="法国" ;;
+    NL) AUTO_REGION="nl-${RANDOM_SUFFIX}"; AUTO_LABEL="荷兰" ;;
+    AU) AUTO_REGION="au-${RANDOM_SUFFIX}"; AUTO_LABEL="澳大利亚" ;;
+    CA) AUTO_REGION="ca-${RANDOM_SUFFIX}"; AUTO_LABEL="加拿大" ;;
+    IN) AUTO_REGION="in-${RANDOM_SUFFIX}"; AUTO_LABEL="印度" ;;
+    RU) AUTO_REGION="ru-${RANDOM_SUFFIX}"; AUTO_LABEL="俄罗斯" ;;
+    TR) AUTO_REGION="tr-${RANDOM_SUFFIX}"; AUTO_LABEL="土耳其" ;;
+    *)  AUTO_REGION="${AUTO_COUNTRY:-custom}-${RANDOM_SUFFIX}"; AUTO_LABEL="${AUTO_COUNTRY:-未知}" ;;
+esac
+
+if [ -n "$AUTO_COUNTRY" ]; then
+    info "地区识别: $AUTO_LABEL ($AUTO_COUNTRY)"
+fi
+
+# ==================== 2. 交互配置 ====================
+echo ""
+echo -e "${BLUE}━━━━━━━━━━━━━━━ ⚙️  配置参数 ━━━━━━━━━━━━━━━${NC}"
+echo -e "${YELLOW}  提示: 直接回车使用 [方括号] 中的默认值${NC}"
 echo ""
 
 # Bridge Token
 DEFAULT_TOKEN="subhub_bridge_$(openssl rand -hex 4 2>/dev/null || head -c 8 /dev/urandom | xxd -p)"
-ask "Bridge 通信密钥 (直接回车使用随机密钥):"
+ask "通信密钥 [随机生成]:"
 read -r BRIDGE_TOKEN
 [ -z "$BRIDGE_TOKEN" ] && BRIDGE_TOKEN="$DEFAULT_TOKEN"
 info "密钥: $BRIDGE_TOKEN"
 
 # 端口
-ask "Bridge 监听端口 [默认 9876]:"
+ask "监听端口 [9876]:"
 read -r BRIDGE_PORT
 [ -z "$BRIDGE_PORT" ] && BRIDGE_PORT="9876"
 info "端口: $BRIDGE_PORT"
 
-# 区域标签
-ask "区域标签（如 jp/us/hk/sg，用于 SubHub 识别）:"
+# 区域标签（自动生成）
+ask "区域标签 [${AUTO_REGION}]:"
 read -r REGION
-[ -z "$REGION" ] && REGION="custom"
+[ -z "$REGION" ] && REGION="$AUTO_REGION"
 info "区域: $REGION"
 
-# 区域显示名
-ask "区域显示名（如 日本/美国/香港，显示在 SubHub 前端）:"
+# 区域显示名（自动映射）
+ask "显示名称 [${AUTO_LABEL}]:"
 read -r LABEL
-[ -z "$LABEL" ] && LABEL="$REGION"
+[ -z "$LABEL" ] && LABEL="$AUTO_LABEL"
 info "显示名: $LABEL"
 
-# S-UI 域名（关键！生成节点地址用）
-ask "S-UI 域名（如 us.example.com，必填，节点地址用）:"
+# S-UI 域名（可选！没有域名直接回车用 IP）
+echo ""
+echo -e "${YELLOW}  💡 如果此服务器绑定了域名请输入，没有可直接回车使用 IP${NC}"
+ask "S-UI 域名 [${VPS_IP}]:"
 read -r SUI_DOMAIN
-while [ -z "$SUI_DOMAIN" ]; do
-    warn "域名不能为空，否则节点地址将显示为 your-sui-domain.com"
-    ask "S-UI 域名:"
-    read -r SUI_DOMAIN
-done
-info "域名: $SUI_DOMAIN"
+if [ -z "$SUI_DOMAIN" ]; then
+    SUI_DOMAIN="$VPS_IP"
+    info "节点地址: $VPS_IP (使用 IP)"
+else
+    info "节点地址: $SUI_DOMAIN (域名)"
+fi
 
 # NOTE: sui_bridge.py 通过 base64 内嵌，避免 Gitee 内容审查拦截
 info "释放 sui_bridge.py ..."

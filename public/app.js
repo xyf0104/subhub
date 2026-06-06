@@ -1875,9 +1875,9 @@ function previewJsonImport() {
   try {
     let items = JSON.parse(input);
     if (!Array.isArray(items)) items = [items];
-    const valid = items.filter(i => i.hostname && i.token);
+    const valid = items.filter(i => i.hostname && i.token && !i.token.includes('*'));
     if (valid.length === 0) { 
-      preview.innerHTML = '<div style="color:#ef4444;font-size:0.85em;padding:8px;background:rgba(239,68,68,0.1);border-radius:8px">⚠️ 未找到有效配置（需要 hostname 和 token 字段）</div>';
+      preview.innerHTML = '<div style="color:#ef4444;font-size:0.85em;padding:8px;background:rgba(239,68,68,0.1);border-radius:8px">⚠️ 未找到有效配置（需要 hostname 和完整 token，token 不能含 * 号）</div>';
       preview.style.display = 'block';
       return;
     }
@@ -1910,8 +1910,8 @@ async function submitJsonImport() {
     if (!Array.isArray(items)) items = [items];
   } catch { toast('JSON 格式错误', 'error'); return; }
 
-  const valid = items.filter(i => i.hostname && i.token);
-  if (valid.length === 0) { toast('未找到有效配置', 'error'); return; }
+  const valid = items.filter(i => i.hostname && i.token && !i.token.includes('*'));
+  if (valid.length === 0) { toast('未找到有效配置（token 不能包含 * 号）', 'error'); return; }
 
   btn.disabled = true;
   btn.textContent = '⏳ 导入中...';

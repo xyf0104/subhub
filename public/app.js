@@ -1198,21 +1198,17 @@ let _editShareNodes = [];
 let _editShareFilter = { sub: 'all', search: '' };
 
 /**
- * 打开编辑分享弹窗（带筛选搜索）
+ * 打开编辑分享 — 全屏页面版
+ * NOTE: 使用标签页分区，自建节点直接在第一屏可见
  */
-// NOTE: 当前编辑中的分享 ID 和 overrides 缓存
 let _currentEditShareId = '';
 let _currentNodeOverrides = {};
 let _currentSuiOverrides = {};
 
 async function openEditShare(shareId) {
   try {
-    // NOTE: 每次编辑都重新加载节点和订阅，确保显示最新数据
     const [sharesData, nodesData, subsData] = await Promise.all([
-      api('/shares'),
-      api('/nodes'),
-      api('/subscriptions'),
-      loadSuiInbounds(),
+      api('/shares'), api('/nodes'), api('/subscriptions'), loadSuiInbounds(),
     ]);
     _editShareNodes = nodesData.nodes;
     _allSubs = subsData.subscriptions || [];
@@ -1226,107 +1222,160 @@ async function openEditShare(shareId) {
     const currentIds = new Set(share.nodeIds || []);
     const trafficGB = share.trafficLimit > 0 ? (share.trafficLimit / 1073741824).toFixed(1) : '';
     const expireDate = share.expireAt ? new Date(share.expireAt).toISOString().split('T')[0] : '';
-
-    const flags = {JP:'🇯🇵',HK:'🇭🇰',SG:'🇸🇬',US:'🇺🇸',TW:'🇹🇼',KR:'🇰🇷',UK:'🇬🇧',DE:'🇩🇪',FR:'🇫🇷',CA:'🇨🇦',AU:'🇦🇺'};
-    const selectedNodes = _editShareNodes.filter(n => currentIds.has(n.id));
-    // NOTE: 兼容新旧数据结构 — 旧版 suiInboundIds 视为 jp 区域
     const suiBridgesData = share.suiBridges || (share.suiClientName ? { jp: { clientName: share.suiClientName, inboundIds: share.suiInboundIds || [] } } : {});
-    const allSuiCheckedIds = [];
-    for (const info of Object.values(suiBridgesData)) {
-      allSuiCheckedIds.push(...(info.inboundIds || []));
-    }
+    const selectedNodes = _editShareNodes.filter(n => currentIds.has(n.id));
     const selectedSui = SUI_INBOUNDS.filter(ib => {
       const regionInfo = suiBridgesData[ib.region];
       return regionInfo && (regionInfo.inboundIds || []).includes(ib.id);
     });
 
-    const selectedHtml = (selectedNodes.length + selectedSui.length) > 0 ? `
-      <div class="selected-nodes-section">
-        <h5>✅ 已分享的节点（${selectedNodes.length + selectedSui.length} 个）</h5>
-        ${selectedNodes.map(n => {
-          const ov = _currentNodeOverrides[n.id];
-          const displayName = ov?.name || n.name;
-          return `
-          <div class="selected-node-row" id="sel-node-${n.id}">
-            <span>${flags[n.region]||'🌍'}</span>
-            <span class="node-name">${esc(displayName)}${ov ? ' <span style="color:var(--accent);font-size:0.7rem;">已定制</span>' : ''}</span>
-            <span class="type-badge ${n.type==='hysteria2'?'hy2':n.type}" style="font-size:0.7rem;">${n.type}</span>
-            <div class="node-actions">
-              <button class="btn btn-secondary" onclick="testShareNode('${n.id}')">⚡ 测速</button>
-              <button class="btn btn-secondary" onclick="editShareNodeOverride('${n.id}','${shareId}')">✏️ 编辑</button>
-            </div>
-          </div>`;
-        }).join('')}
-        ${selectedSui.map(ib => {
-          const regionFlags2 = { jp: '🇯🇵', us: '🇺🇸', hk: '🇭🇰', sg: '🇸🇬' };
-          const ovKey = `${ib.region}_${ib.id}`;
-          const suiOv = (_currentSuiOverrides || {})[ovKey];
-          const suiName = suiOv?.name || ib.name;
-          return `
-          <div class="selected-node-row">
-            <span>${regionFlags2[ib.region]||'🌍'}</span>
-            <span class="node-name">${esc(suiName)}（自建）${suiOv ? ' <span style="color:var(--accent);font-size:0.7rem;">已定制</span>' : ''}</span>
-            <span class="type-badge ${ib.type==='hysteria2'?'hy2':ib.type}" style="font-size:0.7rem;">${ib.type}</span>
-            <div class="node-actions">
-              <button class="btn btn-secondary" onclick="testShareNode('sui_${ib.region}_${ib.id}')">⚡ 测速</button>
-              <button class="btn btn-secondary" onclick="editSuiNodeOverride('${ib.region}',${ib.id},'${shareId}')">✏️ 编辑</button>
-            </div>
-          </div>`;
-        }).join('')}
-      </div>` : '';
+    // 切换到编辑页面
+    document.querySelectorAll('.page-section').forEach(s => s.classList.remove('active'));
+    document.getElementById('page-edit-share').classList.add('active');
+    document.getElementById('pageTitle').textContent = `编辑 - ${share.title}`;
+    document.getElementById('headerActions').innerHTML = '';
 
-    let modal = document.getElementById('editShareModal');
-    if (!modal) {
-      modal = document.createElement('div');
-      modal.id = 'editShareModal';
-      modal.className = 'modal-overlay';
-      document.body.appendChild(modal);
-    }
-    modal.innerHTML = `
-      <div class="modal modal-compact" style="max-width:90vw;width:800px;">
-        <div class="modal-header" style="padding:12px 16px;"><h3 style="margin:0;font-size:1rem;">编辑分享 - ${esc(share.title)}</h3><button class="modal-close" onclick="closeModal('editShareModal')">✕</button></div>
-        <div class="modal-body" style="padding:8px 16px 12px;">
-          <div class="edit-share-form">
-            <div class="form-group">
-              <label>📝 分享标题</label>
-              <input class="form-input" id="editShareTitle" value="${esc(share.title)}" placeholder="用户名称">
-            </div>
-            <div class="form-group">
-              <label>📊 流量限制 (GB)</label>
-              <div class="input-with-btn">
-                <input class="form-input" id="editShareTraffic" type="number" step="0.1" value="${trafficGB}" placeholder="留空=不限">
-                <button type="button" class="btn-infinity" title="设为无限" onclick="document.getElementById('editShareTraffic').value='';toast('流量已设为无限','success')">♾️</button>
+    const el = document.getElementById('edit-share-content');
+    el.innerHTML = `
+      <div style="max-width:1100px;margin:0 auto">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:10px">
+          <button class="btn btn-secondary" onclick="navigate('shares')">← 返回列表</button>
+          <button class="btn btn-primary" onclick="submitEditShare('${shareId}')" style="min-width:120px">💾 保存</button>
+        </div>
+        <div class="edit-share-tabs" style="display:flex;gap:0;border-bottom:2px solid var(--border-color);margin-bottom:20px">
+          <button class="edit-tab active" data-tab="basic" onclick="switchEditTab('basic')">⚙️ 基本 & 自建节点</button>
+          <button class="edit-tab" data-tab="nodes" onclick="switchEditTab('nodes')">📡 订阅节点</button>
+          <button class="edit-tab" data-tab="selected" onclick="switchEditTab('selected')">✅ 已选 <span id="editSelectedCount" style="background:var(--accent);color:#fff;border-radius:10px;padding:1px 8px;font-size:0.75em;margin-left:4px">${selectedNodes.length + selectedSui.length}</span></button>
+        </div>
+        <div class="edit-tab-content active" id="tab-basic">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px" class="edit-share-grid">
+            <div style="background:var(--card-bg);border-radius:12px;padding:20px;border:1px solid var(--border-color)">
+              <h4 style="margin:0 0 16px;font-size:1em">📝 基本配置</h4>
+              <div class="form-group" style="margin-bottom:14px">
+                <label style="font-size:0.85em;font-weight:600">分享标题</label>
+                <input class="form-input" id="editShareTitle" value="${esc(share.title)}" placeholder="用户名称">
+              </div>
+              <div class="form-group" style="margin-bottom:14px">
+                <label style="font-size:0.85em;font-weight:600">📊 全局流量 (GB)</label>
+                <div class="input-with-btn">
+                  <input class="form-input" id="editShareTraffic" type="number" step="0.1" value="${trafficGB}" placeholder="留空=不限">
+                  <button type="button" class="btn-infinity" title="设为无限" onclick="document.getElementById('editShareTraffic').value='';toast('流量已设为无限','success')">♾️</button>
+                </div>
+              </div>
+              <div class="form-group">
+                <label style="font-size:0.85em;font-weight:600">⏰ 到期日期</label>
+                <div class="input-with-btn">
+                  <input class="form-input" id="editShareExpire" type="date" value="${expireDate}">
+                  <button type="button" class="btn-infinity" title="设为永久" onclick="document.getElementById('editShareExpire').value='';toast('已设为永久有效','success')">♾️</button>
+                </div>
               </div>
             </div>
-            <div class="form-group">
-              <label>⏰ 到期日期</label>
-              <div class="input-with-btn">
-                <input class="form-input" id="editShareExpire" type="date" value="${expireDate}">
-                <button type="button" class="btn-infinity" title="设为永久" onclick="document.getElementById('editShareExpire').value='';toast('已设为永久有效','success')">♾️</button>
-              </div>
+            <div style="background:var(--card-bg);border-radius:12px;padding:20px;border:1px solid var(--border-color)">
+              <h4 style="margin:0 0 16px;font-size:1em">🔗 自建节点 (Bridge)</h4>
+              ${SUI_INBOUNDS.length > 0
+                ? renderSuiInboundSelector(suiBridgesData, 'editSuiInbound', 'editShareNodeList')
+                : '<div style="padding:20px;text-align:center;opacity:0.5"><p>暂无 Bridge 节点</p><p style="font-size:0.85em">请先在 Bridge 页面添加</p></div>'}
             </div>
           </div>
           ${buildRegionConfigRows(suiBridgesData, 'editShareTraffic')}
-          ${selectedHtml}
+        </div>
+        <div class="edit-tab-content" id="tab-nodes" style="display:none">
           <div id="editShareNodeList" class="share-node-list"></div>
         </div>
-        <div class="modal-footer" style="padding:8px 16px;">
-          <button class="btn btn-secondary" onclick="closeModal('editShareModal')">取消</button>
-          <button class="btn btn-primary" onclick="submitEditShare('${shareId}')">保存</button>
+        <div class="edit-tab-content" id="tab-selected" style="display:none">
+          <div id="editSelectedList"></div>
+        </div>
+        <div style="margin-top:24px;display:flex;justify-content:flex-end;gap:10px;padding-bottom:20px">
+          <button class="btn btn-secondary" onclick="navigate('shares')">取消</button>
+          <button class="btn btn-primary" onclick="submitEditShare('${shareId}')" style="min-width:140px">💾 保存修改</button>
         </div>
       </div>`;
 
-    // NOTE: 编辑时回显已勾选的入站 + 流量配置，传入完整 suiBridgesData
-    const suiCheckedMap = {};
-    for (const [region, info] of Object.entries(suiBridgesData)) {
-      suiCheckedMap[region] = info.inboundIds || [];
-      if (info.trafficLimitGB) {
-        suiCheckedMap[region] = { ids: info.inboundIds || [], trafficLimitGB: info.trafficLimitGB };
-      }
-    }
+    injectEditShareStyles();
     buildShareNodeSelector('editShareNodeList', 'editShareNode', _editShareNodes, currentIds, suiBridgesData);
-    modal.classList.add('active');
+    buildSelectedNodesList(selectedNodes, selectedSui, shareId);
   } catch (e) { toast(e.message, 'error'); }
+}
+
+/** 注入编辑页样式 */
+function injectEditShareStyles() {
+  if (document.getElementById('edit-share-styles')) return;
+  const style = document.createElement('style');
+  style.id = 'edit-share-styles';
+  style.textContent = `
+    .edit-tab{padding:10px 20px;border:none;background:none;cursor:pointer;font-size:0.9em;font-weight:600;color:var(--text-muted);border-bottom:2px solid transparent;transition:all 0.2s;position:relative;bottom:-2px}
+    .edit-tab:hover{color:var(--text-color)}
+    .edit-tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+    @media(max-width:768px){.edit-share-grid{grid-template-columns:1fr!important}.edit-tab{padding:8px 12px;font-size:0.82em}}
+  `;
+  document.head.appendChild(style);
+}
+
+/** 切换编辑标签页 */
+function switchEditTab(tab) {
+  document.querySelectorAll('.edit-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+  document.querySelectorAll('.edit-tab-content').forEach(c => { c.style.display = 'none'; c.classList.remove('active'); });
+  const target = document.getElementById('tab-' + tab);
+  if (target) { target.style.display = ''; target.classList.add('active'); }
+  if (tab === 'selected') refreshSelectedList();
+}
+
+/** 构建已选节点列表 */
+function buildSelectedNodesList(selectedNodes, selectedSui, shareId) {
+  const el = document.getElementById('editSelectedList');
+  if (!el) return;
+  const flags = {JP:'🇯🇵',HK:'🇭🇰',SG:'🇸🇬',US:'🇺🇸',TW:'🇹🇼',KR:'🇰🇷',UK:'🇬🇧',DE:'🇩🇪',FR:'🇫🇷',CA:'🇨🇦',AU:'🇦🇺'};
+  const rf2 = {jp:'🇯🇵',us:'🇺🇸',hk:'🇭🇰',sg:'🇸🇬',tw:'🇹🇼',kr:'🇰🇷',de:'🇩🇪',gb:'🇬🇧'};
+  let html = '';
+  if (selectedNodes.length + selectedSui.length === 0) {
+    html = '<div style="text-align:center;padding:40px;opacity:0.5"><p>暂未选择任何节点</p></div>';
+  } else {
+    if (selectedSui.length > 0) {
+      html += '<h4 style="margin:0 0 12px;font-size:0.95em">🔗 自建节点</h4><div style="display:grid;gap:8px;margin-bottom:20px">';
+      for (const ib of selectedSui) {
+        const ovKey = `${ib.region}_${ib.id}`;
+        const suiOv = (_currentSuiOverrides||{})[ovKey];
+        html += `<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bg-color);border-radius:8px;border:1px solid var(--border-color)">
+          <span>${rf2[ib.region.split('-')[0]]||'🌍'}</span>
+          <span style="flex:1;font-weight:500">${esc(suiOv?.name||ib.name)} <span style="font-size:0.75em;opacity:0.5">（自建）</span></span>
+          <span class="type-badge ${ib.type==='hysteria2'?'hy2':ib.type}" style="font-size:0.72rem">${ib.type}</span>
+          <button class="btn btn-sm btn-secondary" onclick="testShareNode('sui_${ib.region}_${ib.id}')">⚡</button>
+          <button class="btn btn-sm btn-secondary" onclick="editSuiNodeOverride('${ib.region}',${ib.id},'${shareId}')">✏️</button>
+        </div>`;
+      }
+      html += '</div>';
+    }
+    if (selectedNodes.length > 0) {
+      html += '<h4 style="margin:0 0 12px;font-size:0.95em">📡 订阅节点</h4><div style="display:grid;gap:8px">';
+      for (const n of selectedNodes) {
+        const ov = _currentNodeOverrides[n.id];
+        html += `<div id="sel-node-${n.id}" style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bg-color);border-radius:8px;border:1px solid var(--border-color)">
+          <span>${flags[n.region]||'🌍'}</span>
+          <span class="node-name" style="flex:1;font-weight:500">${esc(ov?.name||n.name)}${ov?' <span style="color:var(--accent);font-size:0.7rem">已定制</span>':''}</span>
+          <span class="type-badge ${n.type==='hysteria2'?'hy2':n.type}" style="font-size:0.72rem">${n.type}</span>
+          <div class="node-actions" style="display:flex;gap:4px">
+            <button class="btn btn-sm btn-secondary" onclick="testShareNode('${n.id}')">⚡</button>
+            <button class="btn btn-sm btn-secondary" onclick="editShareNodeOverride('${n.id}','${shareId}')">✏️</button>
+          </div>
+        </div>`;
+      }
+      html += '</div>';
+    }
+  }
+  el.innerHTML = html;
+}
+
+/** 刷新已选列表 */
+function refreshSelectedList() {
+  const currentIds = new Set(getShareCheckedIds('editShareNodeList'));
+  const selectedNodes = _editShareNodes.filter(n => currentIds.has(n.id));
+  const suiCbs = document.querySelectorAll('.sui-inbound-item input:checked');
+  const suiKeys = new Set();
+  suiCbs.forEach(cb => suiKeys.add(`${cb.dataset.region}_${cb.value}`));
+  const selectedSui = SUI_INBOUNDS.filter(ib => suiKeys.has(`${ib.region}_${ib.id}`));
+  const countEl = document.getElementById('editSelectedCount');
+  if (countEl) countEl.textContent = selectedNodes.length + selectedSui.length;
+  buildSelectedNodesList(selectedNodes, selectedSui, _currentEditShareId);
 }
 
 /**
@@ -1568,7 +1617,7 @@ async function submitEditShare(shareId) {
       })
     });
     toast('分享已更新', 'success');
-    closeModal('editShareModal');
+    navigate('shares');
     loadShares();
   } catch (e) { toast(e.message, 'error'); }
 }

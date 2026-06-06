@@ -310,11 +310,31 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 self.send_json(409, {"error": f"客户端 {name} 已存在"})
                 return
 
-            conn.execute(
-                "INSERT INTO clients (enable, name, config, inbounds, links, volume, expiry, down, up, desc, `group`, delay_start, auto_reset, reset_days, next_reset, total_up, total_down) VALUES (?,?,?,?,?,?,?,0,0,'','',0,0,0,0,0,0)",
-                (1, name, json.dumps(config, indent=4).encode(), json.dumps(inbound_ids, indent=4).encode(),
-                 json.dumps(links, indent=2).encode(), volume, expiry)
-            )
+            # NOTE: 自适应 s-ui 版本 — 老版没有 delay_start 等字段
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(clients)").fetchall()]
+            base_cols = ["enable", "name", "config", "inbounds", "links", "volume", "expiry", "down", "up", "desc"]
+            base_vals = [1, name, json.dumps(config, indent=4).encode(), json.dumps(inbound_ids, indent=4).encode(),
+                         json.dumps(links, indent=2).encode(), volume, expiry, 0, 0, ""]
+            # group 是 SQLite 保留字，需要反引号
+            extra_map = {
+                "group": ("group", ""),
+                "delay_start": ("delay_start", 0),
+                "auto_reset": ("auto_reset", 0),
+                "reset_days": ("reset_days", 0),
+                "next_reset": ("next_reset", 0),
+                "total_up": ("total_up", 0),
+                "total_down": ("total_down", 0),
+            }
+            insert_cols = list(base_cols)
+            insert_vals = list(base_vals)
+            for col_name, (_, default_val) in extra_map.items():
+                if col_name in cols:
+                    insert_cols.append(f"`{col_name}`" if col_name == "group" else col_name)
+                    insert_vals.append(default_val)
+
+            placeholders = ",".join(["?"] * len(insert_cols))
+            col_str = ",".join(insert_cols)
+            conn.execute(f"INSERT INTO clients ({col_str}) VALUES ({placeholders})", insert_vals)
             conn.commit()
 
             # 获取插入的 id

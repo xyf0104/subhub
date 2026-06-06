@@ -1290,9 +1290,9 @@ async function openEditShare(shareId) {
           <button class="modal-close" onclick="closeModal('editShareModal')">✕</button>
         </div>
         <div class="modal-body" style="padding:10px 16px;flex:1;overflow-y:auto;display:flex;flex-direction:column;">
-          <!-- 基本配置（横向一行） -->
-          <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px;flex-shrink:0;">
-            <div class="form-group" style="flex:1;min-width:140px;margin:0;">
+          <!-- 基本配置（横向一行，不换行） -->
+          <div style="display:flex;gap:12px;align-items:flex-end;margin-bottom:10px;flex-shrink:0;">
+            <div class="form-group" style="width:200px;margin:0;">
               <label style="font-size:0.8rem;">📝 分享标题</label>
               <input class="form-input" id="editShareTitle" value="${esc(share.title)}" placeholder="用户名称" style="font-size:0.88rem;">
             </div>
@@ -1347,9 +1347,6 @@ async function openEditShare(shareId) {
     }
     buildShareNodeSelector('editShareNodeList', 'editShareNode', _editShareNodes, currentIds, suiBridgesData);
 
-    // 让节点列表内的 grid 撑满
-    const grid = document.querySelector('#editShareNodeList .share-node-grid');
-    if (grid) { grid.style.maxHeight = 'none'; grid.style.flex = '1'; grid.style.minHeight = '0'; }
 
     modal.classList.add('active');
   } catch (e) { toast(e.message, 'error'); }

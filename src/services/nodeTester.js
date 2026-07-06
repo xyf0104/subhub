@@ -7,8 +7,9 @@ const http = require('http');
 
 // NOTE: 通过 FRP 隧道连接路由器（国内家庭宽带），反映真实用户延迟
 // Docker 容器内通过 host.docker.internal 访问宿主机的 FRP 隧道端口
-const CHINA_PING_API = 'http://host.docker.internal:9877';
-const CHINA_PING_TOKEN = 'subhub_ping_2026';
+const CHINA_PING_API = process.env.CHINA_PING_URL || 'http://host.docker.internal:9877';
+const CHINA_PING_TOKEN = process.env.CHINA_PING_TOKEN || 'subhub_ping_2026';
+
 
 /**
  * 调用大陆 ICMP ping API 测试单个主机

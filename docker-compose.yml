@@ -13,6 +13,8 @@ services:
       - SUI_BRIDGE_URL=${SUI_BRIDGE_URL:-}
       - SUI_BRIDGE_TOKEN=${SUI_BRIDGE_TOKEN:-}
       - SUI_BRIDGES=${SUI_BRIDGES:-}
+      - CHINA_PING_URL=${CHINA_PING_URL:-}
+      - CHINA_PING_TOKEN=${CHINA_PING_TOKEN:-}
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"

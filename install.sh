@@ -2,7 +2,7 @@
 # ============================================================
 #  🌊 SubHub 节点配置 — 全自动安装脚本
 #  一键部署 SubHub + Nginx SSL + frps + s-ui Bridge
-#  用法: bash <(curl -sL https://gitee.com/ranxiaoer/subhub/raw/main/install.sh)
+#  用法: git clone https://github.com/xyf0104/subhub.git /opt/subhub && cd /opt/subhub && bash install.sh
 # ============================================================
 
 set -e
@@ -16,7 +16,8 @@ error() { echo -e "${RED}[✗]${NC} $*"; exit 1; }
 ask()   { echo -ne "${CYAN}[?]${NC} $* "; }
 
 INSTALL_DIR="/opt/subhub"
-REPO_URL="https://gitee.com/ranxiaoer/subhub.git"
+REPO_URL="https://github.com/xyf0104/subhub.git"
+REPO_BRANCH="main"
 VPS_IP=$(curl -s4 --connect-timeout 5 ifconfig.me 2>/dev/null || curl -s4 --connect-timeout 5 ip.sb 2>/dev/null || echo "YOUR_VPS_IP")
 
 echo ""
@@ -191,14 +192,29 @@ echo -e "${BLUE}━━━━━━━━━━━━━━━ 第 5 步: 拉取�
 echo ""
 
 if [ -d "$INSTALL_DIR/.git" ]; then
-    info "更新已有代码..."
-    cd "$INSTALL_DIR" && git pull origin main 2>/dev/null || true
+    info "同步 GitHub main 最新代码..."
+    cd "$INSTALL_DIR"
+    git remote set-url origin "$REPO_URL"
+    git fetch --prune origin "$REPO_BRANCH"
+
+    # NOTE: 不自动覆盖本地源码，避免把未知修改或额外文件打进生产镜像。
+    if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+        error "检测到本地源码偏差，请先清理或提交后重新运行安装脚本"
+    fi
+
+    git checkout "$REPO_BRANCH"
+    git merge --ff-only "origin/$REPO_BRANCH"
+
+    LOCAL_COMMIT=$(git rev-parse HEAD)
+    REMOTE_COMMIT=$(git rev-parse "origin/$REPO_BRANCH")
+    [ "$LOCAL_COMMIT" = "$REMOTE_COMMIT" ] || error "本地分支未与 GitHub main 完全一致，已停止部署"
 else
     [ -d "$INSTALL_DIR" ] && mv "$INSTALL_DIR" "${INSTALL_DIR}.bak.$(date +%s)"
-    git clone "$REPO_URL" "$INSTALL_DIR"
+    git clone --branch "$REPO_BRANCH" --single-branch "$REPO_URL" "$INSTALL_DIR"
 fi
 cd "$INSTALL_DIR"
-info "代码就绪: $INSTALL_DIR"
+DEPLOY_COMMIT=$(git rev-parse --short HEAD)
+info "代码就绪: $INSTALL_DIR（版本: $DEPLOY_COMMIT）"
 
 # ==================== 4. 生成 .env ====================
 echo ""
@@ -207,14 +223,25 @@ echo ""
 
 COOKIE_SECRET=$(openssl rand -hex 16 2>/dev/null || echo "subhub-cookie-$(date +%s)")
 
-cat > "$INSTALL_DIR/.env" << ENVEOF
+if [ -f "$INSTALL_DIR/.env" ]; then
+    # NOTE: 重复执行安装脚本时保留密码、Token 和既有集成配置，仅补齐新版本默认项。
+    mkdir -p /opt/subhub-backups
+    cp "$INSTALL_DIR/.env" "/opt/subhub-backups/env.$(date +%Y%m%d-%H%M%S).bak"
+    grep -q '^SUBSCRIPTION_REFRESH_HOURS=' "$INSTALL_DIR/.env" || echo 'SUBSCRIPTION_REFRESH_HOURS=6' >> "$INSTALL_DIR/.env"
+    grep -q '^ALLOW_INSECURE_SUBSCRIPTION_TLS=' "$INSTALL_DIR/.env" || echo 'ALLOW_INSECURE_SUBSCRIPTION_TLS=false' >> "$INSTALL_DIR/.env"
+    info "已保留现有 .env，并补齐新版本默认配置"
+else
+    cat > "$INSTALL_DIR/.env" << ENVEOF
 # SubHub 节点配置 — 自动生成于 $(date '+%Y-%m-%d %H:%M:%S')
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
 PORT=${PORT}
 COOKIE_SECRET=${COOKIE_SECRET}
+SUBSCRIPTION_REFRESH_HOURS=6
+ALLOW_INSECURE_SUBSCRIPTION_TLS=false
 SUI_BRIDGE_URL=${SUI_BRIDGE_URL}
 SUI_BRIDGE_TOKEN=${SUI_BRIDGE_TOKEN}
 ENVEOF
+fi
 chmod 600 "$INSTALL_DIR/.env"
 info ".env 配置完成"
 
@@ -322,8 +349,10 @@ echo -e "${BLUE}━━━━━━━━━━━━━━━ 第 9 步: 构建�
 echo ""
 
 cd "$INSTALL_DIR"
-docker compose up -d --build
-info "SubHub 容器已启动"
+# NOTE: 安装脚本必须忽略旧构建缓存，确保刚同步的代码和最新基础镜像真正进入容器。
+docker compose build --pull --no-cache subhub
+docker compose up -d --force-recreate --remove-orphans
+info "SubHub 容器已启动（版本: $DEPLOY_COMMIT）"
 
 # 等待服务就绪
 sleep 3
@@ -507,7 +536,7 @@ echo ""
 echo -e "${GREEN}━━━━ 常用命令 ━━━━${NC}"
 echo -e "  查看日志: ${CYAN}docker logs subhub -f${NC}"
 echo -e "  重启服务: ${CYAN}cd /opt/subhub && docker compose restart${NC}"
-echo -e "  更新代码: ${CYAN}cd /opt/subhub && git pull && docker compose up -d --build${NC}"
+echo -e "  更新代码: ${CYAN}cd /opt/subhub && git pull --ff-only origin main && docker compose build --pull --no-cache subhub && docker compose up -d --force-recreate --remove-orphans${NC}"
 echo -e "  查看状态: ${CYAN}docker ps && systemctl status frps${NC}"
 echo ""
 
@@ -516,6 +545,7 @@ cat > "$INSTALL_DIR/INSTALL_INFO.txt" << INFOEOF
 ========================================
 SubHub 安装信息（自动生成，请妥善保存）
 生成时间: $(date '+%Y-%m-%d %H:%M:%S')
+部署版本: ${DEPLOY_COMMIT}
 ========================================
 VPS IP: ${VPS_IP}
 域名: ${DOMAIN:-无}
@@ -534,7 +564,7 @@ Bridge Token: ${SUI_BRIDGE_TOKEN:-未配置}
 Token: ${FRP_TOKEN}
 
 --- 一键更新 ---
-cd /opt/subhub && git pull && docker compose up -d --build
+cd /opt/subhub && git pull --ff-only origin main && docker compose build --pull --no-cache subhub && docker compose up -d --force-recreate --remove-orphans
 ========================================
 INFOEOF
 chmod 600 "$INSTALL_DIR/INSTALL_INFO.txt"

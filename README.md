@@ -5,7 +5,7 @@
 ## ✨ 功能
 
 - 📡 **多协议支持** — Hysteria2、VLESS、VMess、Trojan、Shadowsocks、TUIC
-- 🔗 **订阅源管理** — 导入/刷新第三方机场订阅
+- 🔗 **订阅源管理** — 导入、定时刷新第三方机场订阅，原生支持 Shadowrocket `.conf`
 - 🎁 **分享管理** — 一键创建带流量/时间限制的订阅分享
 - 🇯🇵 **s-ui 集成** — 自动创建日本服务器用户，按入站协议精确控制
 - 📊 **节点测速** — 大陆 ICMP Ping + 服务器监控
@@ -15,7 +15,7 @@
 ## 🚀 一键安装
 
 ```bash
-bash <(curl -sL https://gitee.com/ranxiaoer/subhub/raw/main/install.sh)
+git clone https://github.com/xyf0104/subhub.git /opt/subhub && cd /opt/subhub && bash install.sh
 ```
 
 ### 前提条件
@@ -59,19 +59,21 @@ bash <(curl -sL https://gitee.com/ranxiaoer/subhub/raw/main/install.sh)
 ## 🔧 手动部署
 
 ```bash
-git clone https://gitee.com/wufeng/subhub.git /opt/subhub
+git clone https://github.com/xyf0104/subhub.git /opt/subhub
 cd /opt/subhub
 cp .env.example .env
 # 编辑 .env 填入配置
-docker compose up -d --build
+docker compose build --pull --no-cache subhub
+docker compose up -d --force-recreate --remove-orphans
 ```
 
 ## 🔄 更新
 
 ```bash
 cd /opt/subhub
-git pull
-docker compose up -d --build
+git pull --ff-only origin main
+docker compose build --pull --no-cache subhub
+docker compose up -d --force-recreate --remove-orphans
 ```
 
 ## 📋 路由器配置

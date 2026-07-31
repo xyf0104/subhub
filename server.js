@@ -59,7 +59,9 @@ app.get('*', (req, res) => {
 // Start server
 app.listen(PORT, '0.0.0.0', () => {
   const nodeManager = require('./src/services/nodeManager');
+  const { startAutoRefresh } = require('./src/services/subFetcher');
   const token = nodeManager.getToken();
+  startAutoRefresh();
   console.log('');
   console.log('  ╔══════════════════════════════════════════╗');
   console.log('  ║          🚀 SubHub is running!           ║');

@@ -4,7 +4,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID } = require('crypto');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const NODES_FILE = path.join(DATA_DIR, 'nodes.json');
@@ -28,7 +28,7 @@ function ensureDataFiles() {
   }
   if (!fs.existsSync(CONFIG_FILE)) {
     fs.writeFileSync(CONFIG_FILE, JSON.stringify({
-      token: uuidv4().replace(/-/g, ''),
+      token: randomUUID().replace(/-/g, ''),
       password: process.env.ADMIN_PASSWORD || 'admin',
       createdAt: new Date().toISOString()
     }, null, 2), 'utf-8');
@@ -55,7 +55,7 @@ function getNodeById(id) {
 
 function addNode(node) {
   const nodes = getAllNodes();
-  if (!node.id) node.id = uuidv4();
+  if (!node.id) node.id = randomUUID();
   if (!node.createdAt) node.createdAt = new Date().toISOString();
   nodes.push(node);
   saveNodes(nodes);
@@ -65,7 +65,7 @@ function addNode(node) {
 function addNodes(newNodes) {
   const nodes = getAllNodes();
   for (const node of newNodes) {
-    if (!node.id) node.id = uuidv4();
+    if (!node.id) node.id = randomUUID();
     if (!node.createdAt) node.createdAt = new Date().toISOString();
     nodes.push(node);
   }
@@ -98,7 +98,125 @@ function deleteNodesByGroup(group) {
 }
 
 function saveNodes(nodes) {
-  fs.writeFileSync(NODES_FILE, JSON.stringify(nodes, null, 2), 'utf-8');
+  const temporaryFile = `${NODES_FILE}.${process.pid}.tmp`;
+  fs.writeFileSync(temporaryFile, JSON.stringify(nodes, null, 2), 'utf-8');
+  // NOTE: 同目录 rename 由文件系统原子完成，进程中断时旧节点文件仍保持完整。
+  fs.renameSync(temporaryFile, NODES_FILE);
+}
+
+/**
+ * 生成用于订阅刷新匹配的完整节点指纹。
+ * NOTE: 排除持久化元数据，只比较会影响实际连接或展示的字段。
+ * @param {Object} node 节点配置
+ * @returns {string} 稳定指纹
+ */
+function getNodeFingerprint(node) {
+  const ignoredKeys = new Set(['id', 'createdAt', 'enabled', 'group', 'lastTest']);
+  const normalized = {};
+  for (const key of Object.keys(node).sort()) {
+    if (ignoredKeys.has(key) || node[key] === undefined) continue;
+    normalized[key] = node[key];
+  }
+  return JSON.stringify(normalized);
+}
+
+/**
+ * 生成节点逻辑身份键，允许机场轮换连接凭据时继续沿用节点 ID。
+ * @param {Object} node 节点配置
+ * @returns {string} 逻辑身份键
+ */
+function getNodeIdentityKey(node) {
+  return [
+    String(node.type || '').toLowerCase(),
+    String(node.server || '').trim().toLowerCase(),
+    Number(node.port) || 0,
+    String(node.name || '').trim(),
+  ].join('\u0000');
+}
+
+/**
+ * 生成不包含名称的端点键，只用于新旧两侧均唯一时的名称变更匹配。
+ * @param {Object} node 节点配置
+ * @returns {string} 端点键
+ */
+function getNodeEndpointKey(node) {
+  return [
+    String(node.type || '').toLowerCase(),
+    String(node.server || '').trim().toLowerCase(),
+    Number(node.port) || 0,
+  ].join('\u0000');
+}
+
+/**
+ * 原子替换指定订阅的全部节点。
+ * NOTE: 先在内存中完成校验与合并，最后只写入一次；空结果不会清空旧节点。
+ * @param {string} subscriptionId 订阅 ID
+ * @param {Object[]} newNodes 已完整解析的新节点
+ * @returns {Object[]} 实际保存的订阅节点
+ */
+function replaceSubscriptionNodes(subscriptionId, newNodes) {
+  if (!subscriptionId || !Array.isArray(newNodes) || newNodes.length === 0) {
+    throw new Error('订阅刷新未解析到有效节点，已保留原节点');
+  }
+
+  const groupName = `sub-${subscriptionId}`;
+  const allNodes = getAllNodes();
+  const oldNodes = allNodes.filter(node => node.group === groupName);
+  const otherNodes = allNodes.filter(node => node.group !== groupName);
+  const candidates = newNodes.map(node => ({ ...node, group: groupName }));
+  const availableOldNodes = [...oldNodes];
+  const newEndpointCounts = new Map();
+  const oldEndpointCounts = new Map();
+
+  for (const node of candidates) {
+    const key = getNodeEndpointKey(node);
+    newEndpointCounts.set(key, (newEndpointCounts.get(key) || 0) + 1);
+  }
+  for (const node of oldNodes) {
+    const key = getNodeEndpointKey(node);
+    oldEndpointCounts.set(key, (oldEndpointCounts.get(key) || 0) + 1);
+  }
+
+  /**
+   * 从尚未匹配的旧节点中消费一个节点，避免重复节点共享 ID。
+   * @param {(node: Object) => boolean} predicate 匹配条件
+   * @returns {Object|null} 匹配节点
+   */
+  function takeOldNode(predicate) {
+    const index = availableOldNodes.findIndex(predicate);
+    if (index === -1) return null;
+    return availableOldNodes.splice(index, 1)[0];
+  }
+
+  const now = new Date().toISOString();
+  const replacementNodes = candidates.map(candidate => {
+    const fingerprint = getNodeFingerprint(candidate);
+    const identityKey = getNodeIdentityKey(candidate);
+    const endpointKey = getNodeEndpointKey(candidate);
+    let existing = takeOldNode(node => getNodeFingerprint(node) === fingerprint);
+
+    // NOTE: 凭据轮换时，同名同端点仍视为同一逻辑节点，分享链接无需重建。
+    if (!existing) {
+      existing = takeOldNode(node => getNodeIdentityKey(node) === identityKey);
+    }
+
+    // NOTE: 只有端点在新旧列表中都唯一时才允许跨名称匹配，避免误配同端口重复节点。
+    if (!existing
+      && newEndpointCounts.get(endpointKey) === 1
+      && oldEndpointCounts.get(endpointKey) === 1) {
+      existing = takeOldNode(node => getNodeEndpointKey(node) === endpointKey);
+    }
+
+    return {
+      ...candidate,
+      id: existing?.id || randomUUID(),
+      createdAt: existing?.createdAt || candidate.createdAt || now,
+      enabled: existing?.enabled ?? candidate.enabled ?? true,
+    };
+  });
+
+  saveNodes([...otherNodes, ...replacementNodes]);
+  return replacementNodes;
 }
 
 // ---- Subscription Source Operations ----
@@ -110,7 +228,7 @@ function getAllSubscriptions() {
 
 function addSubscription(sub) {
   const subs = getAllSubscriptions();
-  if (!sub.id) sub.id = uuidv4();
+  if (!sub.id) sub.id = randomUUID();
   sub.createdAt = new Date().toISOString();
   sub.lastUpdate = null;
   sub.nodeCount = 0;
@@ -156,7 +274,7 @@ function getToken() {
 }
 
 function regenerateToken() {
-  const newToken = uuidv4().replace(/-/g, '');
+  const newToken = randomUUID().replace(/-/g, '');
   updateConfig({ token: newToken });
   return newToken;
 }
@@ -191,8 +309,8 @@ function getShareById(id) {
 function createShare(shareData) {
   const shares = getAllShares();
   const share = {
-    id: uuidv4(),
-    token: uuidv4().replace(/-/g, '').substring(0, 16),
+    id: randomUUID(),
+    token: randomUUID().replace(/-/g, '').substring(0, 16),
     title: shareData.title || '订阅分享',
     nodeIds: shareData.nodeIds || [],
     trafficLimit: shareData.trafficLimit || 0,  // 字节，0=不限
@@ -253,6 +371,7 @@ function saveShares(shares) {
 module.exports = {
   getAllNodes, getEnabledNodes, getNodeById,
   addNode, addNodes, updateNode, deleteNode, deleteNodesByGroup,
+  replaceSubscriptionNodes,
   getAllSubscriptions, addSubscription, updateSubscription, deleteSubscription,
   getConfig, updateConfig, getToken, regenerateToken,
   getPassword, setPassword, ensureDataFiles,

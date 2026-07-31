@@ -11,6 +11,22 @@ const { fetchAndParse, refreshAll } = require('../services/subFetcher');
 const { testNode, testNodes } = require('../services/nodeTester');
 const { nodeToURI } = require('../services/nodeParser');
 
+/**
+ * 生成可发送到浏览器的订阅对象，查询参数可能包含机场 Token，必须在服务端隐藏。
+ * @param {Object} subscription 服务端订阅对象
+ * @returns {Object} 安全订阅对象
+ */
+function serializeSubscription(subscription) {
+  let safeUrl = '[订阅地址已隐藏]';
+  try {
+    const parsed = new URL(subscription.url);
+    const extensionMatch = parsed.pathname.match(/\.(conf|ya?ml|txt)$/i);
+    const typeHint = extensionMatch ? extensionMatch[0].toLowerCase() : '';
+    safeUrl = `${parsed.origin}/••••••${typeHint}`;
+  } catch {}
+  return { ...subscription, url: safeUrl };
+}
+
 // ---- Auth ----
 router.post('/login', login);
 router.post('/logout', requireAuth, logout);
@@ -168,7 +184,7 @@ router.post('/nodes/test-all', requireAuth, async (req, res) => {
 // Get all subscription sources
 router.get('/subscriptions', requireAuth, (req, res) => {
   try {
-    const subs = nodeManager.getAllSubscriptions();
+    const subs = nodeManager.getAllSubscriptions().map(serializeSubscription);
     res.json({ success: true, subscriptions: subs });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -182,6 +198,15 @@ router.post('/subscriptions', requireAuth, async (req, res) => {
     if (!name || !url) {
       return res.status(400).json({ success: false, error: '名称和 URL 不能为空' });
     }
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(url);
+    } catch {
+      return res.status(400).json({ success: false, error: '订阅 URL 格式无效' });
+    }
+    if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+      return res.status(400).json({ success: false, error: '订阅 URL 仅支持 http 或 https' });
+    }
 
     // NOTE: 保存 fetchMode 供后续刷新使用
     const sub = nodeManager.addSubscription({ name, url, fetchMode: fetchMode || 'direct' });
@@ -189,12 +214,19 @@ router.post('/subscriptions', requireAuth, async (req, res) => {
     // Immediately fetch and parse
     try {
       const result = await fetchAndParse(sub.id, url, name, fetchMode);
-      res.json({ success: true, subscription: sub, nodeCount: result.count });
+      const updatedSub = nodeManager.getAllSubscriptions().find(item => item.id === sub.id);
+      res.json({
+        success: true,
+        subscription: serializeSubscription(updatedSub || sub),
+        nodeCount: result.count,
+        sourceType: result.sourceType,
+        parseStats: result.parseStats,
+      });
     } catch (fetchError) {
       // Sub was added but fetch failed
       res.json({
         success: true,
-        subscription: sub,
+        subscription: serializeSubscription(sub),
         warning: `订阅已添加，但拉取失败: ${fetchError.message}`
       });
     }
@@ -213,7 +245,12 @@ router.post('/subscriptions/:id/refresh', requireAuth, async (req, res) => {
     }
 
     const result = await fetchAndParse(sub.id, sub.url, sub.name, sub.fetchMode);
-    res.json({ success: true, count: result.count });
+    res.json({
+      success: true,
+      count: result.count,
+      sourceType: result.sourceType,
+      parseStats: result.parseStats,
+    });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -621,5 +658,7 @@ router.post('/bridges/:id/test', requireAuth, async (req, res) => {
 
 // NOTE: 导出 loadBridges 供 share.js 使用
 router.loadBridges = loadBridges;
+
+router.serializeSubscription = serializeSubscription;
 
 module.exports = router;

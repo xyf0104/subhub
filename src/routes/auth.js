@@ -76,7 +76,7 @@ function requireAuth(req, res, next) {
 }
 
 // Clean up expired sessions periodically
-setInterval(() => {
+const sessionCleanupTimer = setInterval(() => {
   const now = Date.now();
   for (const [id, session] of sessions) {
     if (now - session.createdAt > SESSION_MAX_AGE) {
@@ -84,5 +84,6 @@ setInterval(() => {
     }
   }
 }, 60 * 60 * 1000); // Every hour
+sessionCleanupTimer.unref?.();
 
 module.exports = { login, logout, requireAuth };

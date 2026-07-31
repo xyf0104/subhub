@@ -4,6 +4,7 @@ data/nodes.json
 data/subscriptions.json
 data/config.json
 data/shares.json
+src/data/
 *.tar.gz
 *.log
 fix_shares*.py

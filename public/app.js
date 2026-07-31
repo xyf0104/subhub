@@ -687,14 +687,67 @@ async function submitBatch() {
   catch (err) { toast(err.message,'error'); }
 }
 
-// ---- Subscriptions ----
+/**
+ * 脱敏显示订阅地址，路径和查询参数都可能包含机场凭据。
+ * @param {string} rawUrl 原始或服务端脱敏后的订阅地址
+ * @returns {string} 脱敏地址
+ */
+function formatSubscriptionUrl(rawUrl) {
+  try {
+    const parsed = new URL(rawUrl);
+    const extensionMatch = parsed.pathname.match(/\.(conf|ya?ml|txt)$/i);
+    return `${parsed.origin}/••••••${extensionMatch ? extensionMatch[0].toLowerCase() : ''}`;
+  } catch {
+    return rawUrl ? '[订阅地址已隐藏]' : '';
+  }
+}
+
+/**
+ * 渲染单个订阅源卡片。
+ * @param {Object} subscription 订阅源
+ * @returns {string} 卡片 HTML
+ */
+function renderSubscriptionCard(subscription) {
+  const isConf = subscription.sourceType === 'shadowrocket-conf';
+  const typeLabel = isConf ? 'Shadowrocket CONF' : '远程订阅';
+  const parsedCount = subscription.parseStats?.parsedNodes;
+  const invalidCount = subscription.parseStats?.invalidLines || 0;
+  const lastUpdate = subscription.lastUpdate
+    ? new Date(subscription.lastUpdate).toLocaleString('zh-CN')
+    : '未成功刷新';
+  const errorHtml = subscription.lastError
+    ? `<div class="sub-source-error">⚠️ ${esc(subscription.lastError)}</div>`
+    : '';
+
+  return `<div class="sub-source-card">
+    <div class="sub-source-info">
+      <div class="sub-source-title">
+        <h4>${esc(subscription.name)}</h4>
+        <span class="sub-source-badge ${isConf ? 'conf' : ''}">${typeLabel}</span>
+        ${isConf ? '<span class="sub-source-badge auto">后台自动更新</span>' : ''}
+      </div>
+      <p title="订阅路径和参数已隐藏">${esc(formatSubscriptionUrl(subscription.url))}</p>
+      <div class="sub-source-meta">
+        <span>📡 ${subscription.nodeCount || 0} 个节点</span>
+        <span>🕐 ${lastUpdate}</span>
+        ${isConf && parsedCount !== undefined ? `<span>✅ 解析 ${parsedCount} / 忽略 ${invalidCount}</span>` : ''}
+      </div>
+      ${errorHtml}
+    </div>
+    <div class="sub-source-actions">
+      <button class="btn btn-secondary btn-sm" onclick="refreshSub('${subscription.id}')" title="立即下载并原子更新">🔄 立即更新</button>
+      <button class="btn btn-danger btn-sm" onclick="deleteSub('${subscription.id}')">🗑</button>
+    </div>
+  </div>`;
+}
+
 async function loadSubscriptions() {
   try {
     const { subscriptions } = await api('/subscriptions');
     const c = document.getElementById('subs-content');
     if (subscriptions.length === 0) { c.innerHTML = `<div class="empty-state"><div class="icon">🔗</div><p>还没有添加任何订阅源</p><button class="btn btn-primary" onclick="openAddSub()">+ 添加订阅源</button></div>`; return; }
-    c.innerHTML = subscriptions.map(s => `<div class="sub-source-card"><div class="sub-source-info"><h4>${esc(s.name)}</h4><p>${esc(s.url)}</p><div class="sub-source-meta"><span>📡 ${s.nodeCount||0} 个节点</span><span>🕐 ${s.lastUpdate?new Date(s.lastUpdate).toLocaleString('zh-CN'):'未刷新'}</span></div></div><div class="sub-source-actions"><button class="btn btn-secondary btn-sm" onclick="refreshSub('${s.id}')">🔄</button><button class="btn btn-danger btn-sm" onclick="deleteSub('${s.id}')">🗑</button></div></div>`).join('');
-  } catch (err) { toast('加载失败','error'); }
+    c.innerHTML = subscriptions.map(renderSubscriptionCard).join('');
+  } catch (err) { toast('加载失败: ' + err.message,'error'); }
 }
 
 function openAddSub() { document.getElementById('subName').value=''; document.getElementById('subURL').value=''; document.getElementById('subFetchMode').value='direct'; document.getElementById('subModal').classList.add('active'); }
@@ -707,13 +760,28 @@ async function submitSub() {
   try {
     toast(fetchMode === 'china' ? '正在通过国内网络拉取...' : '正在直连拉取...', 'info');
     const r = await api('/subscriptions',{method:'POST',body:JSON.stringify({name,url,fetchMode})});
-    toast(`已添加，获取到 ${r.nodeCount||0} 个节点`,'success');
-    if (r.warning) toast(r.warning,'info');
+    if (r.warning) {
+      toast(r.warning,'info');
+    } else {
+      const typeText = r.sourceType === 'shadowrocket-conf' ? '，已识别 Shadowrocket CONF' : '';
+      toast(`已添加，获取到 ${r.nodeCount || 0} 个节点${typeText}`,'success');
+    }
     closeModal('subModal'); loadSubscriptions();
   } catch (err) { toast(err.message,'error'); }
 }
 
-async function refreshSub(id) { try { toast('刷新中...','info'); const {count}=await api(`/subscriptions/${id}/refresh`,{method:'POST'}); toast(`获取到 ${count} 个节点`,'success'); loadSubscriptions(); } catch(e){ toast(e.message,'error'); } }
+async function refreshSub(id) {
+  try {
+    toast('正在下载并原子更新...','info');
+    const result = await api(`/subscriptions/${id}/refresh`,{method:'POST'});
+    const typeText = result.sourceType === 'shadowrocket-conf' ? '（Shadowrocket CONF）' : '';
+    toast(`已更新 ${result.count} 个节点${typeText}`,'success');
+    loadSubscriptions();
+  } catch (error) {
+    toast(error.message,'error');
+    loadSubscriptions();
+  }
+}
 async function refreshAllSubs() { try { toast('刷新所有...','info'); const {results}=await api('/subscriptions/refresh-all',{method:'POST'}); const ok=results.filter(r=>r.success).length; toast(`${ok}/${results.length} 成功`,'success'); loadSubscriptions(); } catch(e){ toast(e.message,'error'); } }
 async function deleteSub(id) { if(!confirm('删除此订阅源？'))return; try { await api(`/subscriptions/${id}`,{method:'DELETE'}); toast('已删除','success'); loadSubscriptions(); } catch(e){ toast(e.message,'error'); } }
 

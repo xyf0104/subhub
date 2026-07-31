@@ -386,10 +386,22 @@ textarea.form-input {
 }
 .sub-source-card:hover { border-color: var(--border-hover); box-shadow: var(--shadow-md); }
 .sub-source-info { flex: 1; min-width: 0; }
-.sub-source-info h4 { font-size: 1.05rem; font-weight: 600; margin-bottom: 4px; }
+.sub-source-info h4 { font-size: 1.05rem; font-weight: 600; margin: 0; }
+.sub-source-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+.sub-source-badge {
+  display: inline-flex; align-items: center; padding: 3px 8px; border-radius: 999px;
+  font-size: 0.72rem; font-weight: 700; color: var(--text-secondary);
+  background: var(--bg-input); border: 1px solid var(--border-color);
+}
+.sub-source-badge.conf { color: #2563eb; background: rgba(59,130,246,0.1); border-color: rgba(59,130,246,0.22); }
+.sub-source-badge.auto { color: #059669; background: rgba(16,185,129,0.1); border-color: rgba(16,185,129,0.22); }
 .sub-source-info p { font-size: 0.82rem; color: var(--text-muted); font-family: 'SF Mono', monospace; word-break: break-all; margin-bottom: 2px; }
 .sub-source-meta { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 2px; }
 .sub-source-meta span { font-size: 0.82rem; color: var(--text-secondary); }
+.sub-source-error {
+  margin-top: 7px; padding: 7px 10px; border-radius: 8px; font-size: 0.78rem;
+  color: #b45309; background: rgba(245,158,11,0.09); border: 1px solid rgba(245,158,11,0.2);
+}
 /* NOTE: 按钮在右侧水平一字排开 */
 .sub-source-actions { display: flex; gap: 6px; flex-shrink: 0; }
 .sub-source-actions .btn { white-space: nowrap; }

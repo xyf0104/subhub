@@ -730,6 +730,8 @@ function nodeToURI(node) {
       const params = new URLSearchParams();
       if (node.sni) params.set('sni', node.sni);
       params.set('type', node.network || 'tcp');
+      // NOTE: Shadowrocket 使用 insecure=1 表示跳过证书校验，必须保留机场 CONF 的原始安全策略。
+      if (node.skipCertVerify) params.set('insecure', '1');
       if (node.fingerprint) params.set('fp', node.fingerprint);
       if (node.alpn?.length) params.set('alpn', node.alpn.join(','));
       if (node.network === 'ws') {
